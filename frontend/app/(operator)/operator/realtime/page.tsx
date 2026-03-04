@@ -4,8 +4,8 @@
  * app/(operator)/operator/realtime/page.tsx
  * Giám sát Thời gian thực
  */
-import { Typography, Card, Row, Col, Tag, Space, Progress, Table } from 'antd';
-import { DesktopOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { Typography, Card, Row, Col, Tag, Progress, Table } from 'antd';
+import { DesktopOutlined } from '@ant-design/icons';
 import { useOperatorContext } from '@/contexts/OperatorContext';
 
 const { Title, Text } = Typography;

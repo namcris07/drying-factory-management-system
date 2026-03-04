@@ -4,7 +4,7 @@
  * components/layouts/OperatorLayout.tsx
  * Layout cho role Operator — sidebar xanh lá + real-time simulation.
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { Layout, Badge, Button, Avatar, Typography, Space, App, Menu } from 'antd';
 import {
@@ -32,14 +32,23 @@ interface OperatorLayoutProps {
 }
 
 export default function OperatorLayout({ children }: OperatorLayoutProps) {
-  const [user, setUser] = useState<{ name: string; role: string; zone: string } | null>(null);
   const router = useRouter();
+  const user = useMemo<{ name: string; role: string; zone: string } | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const stored = localStorage.getItem('drytechUser');
+    if (!stored) return null;
+    try {
+      return JSON.parse(stored);
+    } catch {
+      return null;
+    }
+  }, []);
 
   useEffect(() => {
-    const stored = localStorage.getItem('drytechUser');
-    if (!stored) { router.push('/login'); return; }
-    setUser(JSON.parse(stored));
-  }, [router]);
+    if (!user) {
+      router.push('/login');
+    }
+  }, [router, user]);
 
   const zone = user?.zone || 'Zone A';
   const operatorName = user?.name || '';

@@ -6,7 +6,7 @@
  */
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Form, Input, Button, Card, Typography, Divider, Alert, Tag, Space } from 'antd';
+import { Form, Input, Button, Card, Typography, Divider, Alert, Tag } from 'antd';
 import { UserOutlined, LockOutlined } from '@ant-design/icons';
 
 const { Title, Text } = Typography;

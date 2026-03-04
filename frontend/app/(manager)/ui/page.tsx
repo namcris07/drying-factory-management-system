@@ -4,10 +4,10 @@
  * app/(manager)/ui/page.tsx
  * Thư viện Components UI
  */
-import { Typography, Card, Row, Col, Button, Tag, Space, Switch, Slider, Alert, Progress, Tabs } from 'antd';
-import { AppstoreOutlined, CheckCircleOutlined, InfoCircleOutlined } from '@ant-design/icons';
+import { Typography, Card, Button, Tag, Space, Switch, Slider, Alert, Progress, Tabs } from 'antd';
+import { AppstoreOutlined } from '@ant-design/icons';
 
-const { Title, Text, Paragraph } = Typography;
+const { Title, Text } = Typography;
 
 export default function UIComponentsPage() {
   return (

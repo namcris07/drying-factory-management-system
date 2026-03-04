@@ -6,7 +6,7 @@
  * Trung tâm thông báo — dùng chung cho tất cả roles.
  * ─────────────────────────────────────────────────────────────────────────────
  */
-import { useEffect, useState, useMemo } from 'react';
+import { useState, useMemo, useSyncExternalStore } from 'react';
 import {
   Drawer, Badge, Button, Tabs, Typography, Space, Empty,
   Tag, Tooltip,
@@ -17,12 +17,13 @@ import {
   CloseCircleOutlined, FilterOutlined, BellFilled,
 } from '@ant-design/icons';
 import {
-  AppNotification, NotifCategory,
+  AppNotification,
   getNotifications, markAsRead, markAllAsRead,
   clearAllRead, deleteNotification,
 } from '@/data/notificationData';
 
 const { Text } = Typography;
+type TagColor = NonNullable<React.ComponentProps<typeof Tag>['color']>;
 
 function relativeTime(date: Date): string {
   const diff = Math.floor((Date.now() - date.getTime()) / 1000);
@@ -34,7 +35,7 @@ function relativeTime(date: Date): string {
 
 const SEVERITY_CONFIG: Record<
   AppNotification['severity'],
-  { icon: React.ReactNode; color: string; bg: string; border: string; tagColor: string; label: string }
+  { icon: React.ReactNode; color: string; bg: string; border: string; tagColor: TagColor; label: string }
 > = {
   error:   { icon: <CloseCircleOutlined />, color: '#ff4d4f', bg: '#fff2f0', border: '#ffccc7', tagColor: 'error',   label: 'Lỗi'       },
   warning: { icon: <WarningOutlined />,     color: '#faad14', bg: '#fffbe6', border: '#ffe58f', tagColor: 'warning', label: 'Cảnh báo'  },
@@ -69,7 +70,7 @@ function NotificationItem({
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2, flexWrap: 'wrap' }}>
             <Text strong style={{ fontSize: 13, color: '#262626' }}>{notif.title}</Text>
-            <Tag color={s.tagColor as any} style={{ borderRadius: 20, fontSize: 10, padding: '0 6px', lineHeight: '18px', border: 'none', margin: 0 }}>{s.label}</Tag>
+            <Tag color={s.tagColor} style={{ borderRadius: 20, fontSize: 10, padding: '0 6px', lineHeight: '18px', border: 'none', margin: 0 }}>{s.label}</Tag>
             {notif.zone && (
               <Tag style={{ borderRadius: 20, fontSize: 10, padding: '0 6px', lineHeight: '18px', margin: 0, background: '#f5f5f5', border: 'none', color: '#595959' }}>{notif.zone}</Tag>
             )}
@@ -103,12 +104,12 @@ export default function NotificationCenter({ role, accentColor = '#1677ff' }: No
   const [open, setOpen]           = useState(false);
   const [tick, setTick]           = useState(0);
   const [activeTab, setActiveTab] = useState<string>('all');
-  const [hydrated, setHydrated]   = useState(false);
+  const hydrated = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false,
+  );
   const refresh = () => setTick(t => t + 1);
-
-  useEffect(() => {
-    setHydrated(true);
-  }, []);
 
   const allNotifs    = useMemo(() => getNotifications(role), [role, tick]); // eslint-disable-line
   const unreadCount  = allNotifs.filter(n => !n.read).length;

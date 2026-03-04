@@ -4,7 +4,7 @@
  * components/layouts/AdminLayout.tsx
  * Layout cho role Admin — sidebar đỏ + MQTT status bar.
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import {
   Layout, Menu, Typography, Avatar, Space, App, Button, Badge, Tooltip,
@@ -58,16 +58,27 @@ function AdminLayoutInner({ children }: AdminLayoutProps) {
   const router = useRouter();
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
-  const [user, setUser] = useState<{ name: string; role: string } | null>(null);
+  const user = useMemo<{ name: string; role: string } | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const stored = localStorage.getItem('drytechUser');
+    if (!stored) return null;
+    try {
+      return JSON.parse(stored);
+    } catch {
+      return null;
+    }
+  }, []);
   const { connected, latency } = useMqttStatus();
 
   useEffect(() => {
-    const stored = localStorage.getItem('drytechUser');
-    if (!stored) { router.push('/login'); return; }
-    const parsed = JSON.parse(stored);
-    if (parsed.role !== 'Admin') { router.push('/'); return; }
-    setUser(parsed);
-  }, [router]);
+    if (!user) {
+      router.push('/login');
+      return;
+    }
+    if (user.role !== 'Admin') {
+      router.push('/');
+    }
+  }, [router, user]);
 
   const selectedKey = MENU_ITEMS.find(item => pathname.startsWith(item.key))?.key || '/admin/users';
 

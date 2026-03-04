@@ -4,7 +4,7 @@
  * components/layouts/MainLayout.tsx
  * Layout cho role Manager — sidebar + header + content area.
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import {
   Layout, Menu, Avatar, Typography, Button,
@@ -53,13 +53,22 @@ function MainLayoutInner({ children }: MainLayoutProps) {
   const router = useRouter();
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
-  const [user, setUser] = useState<{ name: string; role: string; zone?: string } | null>(null);
+  const user = useMemo<{ name: string; role: string; zone?: string } | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const stored = localStorage.getItem('drytechUser');
+    if (!stored) return null;
+    try {
+      return JSON.parse(stored);
+    } catch {
+      return null;
+    }
+  }, []);
 
   useEffect(() => {
-    const stored = localStorage.getItem('drytechUser');
-    if (!stored) { router.push('/login'); return; }
-    setUser(JSON.parse(stored));
-  }, [router]);
+    if (!user) {
+      router.push('/login');
+    }
+  }, [router, user]);
 
   const handleLogout = () => {
     localStorage.removeItem('drytechUser');
