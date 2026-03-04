@@ -2,68 +2,95 @@ name: Node.js CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  # Job kiểm tra Frontend
-  frontend-build:
+  frontend-ci:
+    name: Frontend (lint, test, build)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
-        working-directory: ./frontend # Chỉ định thư mục làm việc cho toàn bộ job
+        working-directory: ./frontend
 
     strategy:
       matrix:
-        node-version: [20.x] # Có thể dùng 18.x, 20.x, 22.x nếu cần kiểm tra đa phiên bản
+        node-version: [20.x]
 
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Use Node.js ${{ matrix.node-version }}
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ matrix.node-version }}
-        cache: 'npm'
-        # Sửa lỗi không tìm thấy lock file bằng cách chỉ định đường dẫn cụ thể
-        cache-dependency-path: ./frontend/package-lock.json
+      - uses: actions/checkout@v4
 
-    - name: Install dependencies
-      run: npm ci
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: ./frontend/package-lock.json
 
-    - name: Run Lint
-      run: npm run lint --if-present
+      - name: Install dependencies
+        run: npm ci
 
-    - name: Build project
-      run: npm run build --if-present
+      - name: Lint
+        run: npm run lint
 
-    - name: Run Tests
-      # --if-present giúp bỏ qua lỗi nếu package.json chưa có script test
-      run: npm test --if-present
+      - name: Test
+        run: npm run test
 
-  # Job kiểm tra Backend
-  backend-build:
+      - name: Test coverage
+        run: npm run test:cov
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage
+          path: frontend/coverage
+          if-no-files-found: error
+
+      - name: Build
+        run: npm run build
+
+  backend-ci:
+    name: Backend (lint, test, build)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: ./backend
 
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Use Node.js 20.x
-      uses: actions/setup-node@v4
-      with:
-        node-version: 20.x
-        cache: 'npm'
-        cache-dependency-path: ./backend/package-lock.json
+      - uses: actions/checkout@v4
 
-    - name: Install dependencies
-      run: npm ci
+      - name: Use Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: npm
+          cache-dependency-path: ./backend/package-lock.json
 
-    - name: Build project
-      run: npm run build --if-present
+      - name: Install dependencies
+        run: npm ci
 
-    - name: Run Tests
-      run: npm test --if-present
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm run test
+
+      - name: Test coverage
+        run: npm run test:cov
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: backend/coverage
+          if-no-files-found: error
+
+      - name: Build
+        run: npm run build
