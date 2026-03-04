@@ -1,0 +1,228 @@
+# =============================================================================
+# CI/CD Pipeline for Drying Factory Management System
+# =============================================================================
+# This workflow handles:
+#   1. Frontend CI  – lint, test, and build the Next.js app
+#   2. Backend CI   – test (unit + e2e) and build the Nest.js API
+#   3. Docker Build – build & push images to Docker Hub
+#   4. Deploy       – pull and run containers on the remote server via SSH
+# =============================================================================
+
+name: CI/CD Pipeline
+
+# ---------------------------------------------------------------------------
+# Trigger: runs on pushes and pull requests targeting the main branch
+# ---------------------------------------------------------------------------
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# ---------------------------------------------------------------------------
+# Global environment variables shared across all jobs
+# ---------------------------------------------------------------------------
+env:
+  NODE_VERSION: "20.x"
+
+# =============================================================================
+# Jobs
+# =============================================================================
+jobs:
+  # ===========================================================================
+  # 1. Frontend CI — Next.js
+  # ===========================================================================
+  frontend-ci:
+    name: Frontend CI (Next.js)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./frontend
+
+    steps:
+      # ---- Checkout source code ----
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ---- Node.js setup ----
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # ---- Cache npm dependencies to speed up subsequent runs ----
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-frontend-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-frontend-
+
+      # ---- Install dependencies ----
+      - name: Install dependencies
+        run: npm install
+
+      # ---- Lint with ESLint ----
+      - name: Run ESLint
+        run: npm run lint
+
+      # ---- Unit tests ----
+      - name: Run unit tests
+        run: npm run test
+
+      # ---- Production build ----
+      - name: Build Next.js project
+        run: npm run build
+
+  # ===========================================================================
+  # 2. Backend CI — Nest.js
+  # ===========================================================================
+  backend-ci:
+    name: Backend CI (Nest.js)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./backend
+
+    steps:
+      # ---- Checkout source code ----
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ---- Node.js setup ----
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # ---- Cache npm dependencies ----
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-backend-${{ hashFiles('backend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-backend-
+
+      # ---- Install dependencies ----
+      - name: Install dependencies
+        run: npm install
+
+      # ---- Unit tests ----
+      - name: Run unit tests
+        run: npm run test
+
+      # ---- End-to-end tests ----
+      - name: Run e2e tests
+        run: npm run test:e2e
+
+      # ---- Production build ----
+      - name: Build Nest.js app
+        run: npm run build
+
+  # ===========================================================================
+  # 3. Docker Build & Push
+  # ===========================================================================
+  # Runs only after both CI jobs succeed and only on pushes to main
+  # (we don't push images for pull-request checks).
+  # ===========================================================================
+  docker-build:
+    name: Docker Build & Push
+    runs-on: ubuntu-latest
+    needs: [frontend-ci, backend-ci]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      # ---- Checkout source code (needed for Docker build context) ----
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ---- Authenticate with Docker Hub ----
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      # ---- Set up Docker Buildx for advanced build features ----
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ---- Build & push frontend image ----
+      # Tags: commit SHA for traceability + "latest" for convenience
+      - name: Build & push Frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/frontend-app:${{ github.sha }}
+            ${{ secrets.DOCKER_USERNAME }}/frontend-app:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ---- Build & push backend image ----
+      - name: Build & push Backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/backend-api:${{ github.sha }}
+            ${{ secrets.DOCKER_USERNAME }}/backend-api:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ===========================================================================
+  # 4. Deploy to Remote Server
+  # ===========================================================================
+  # Runs only after Docker images have been pushed successfully.
+  # Connects via SSH, pulls the latest images, and restarts the containers.
+  # ===========================================================================
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [docker-build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      # ---- Deploy over SSH ----
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            set -e  # Exit immediately on any error
+
+            echo "==> Pulling latest Docker images..."
+            docker pull ${{ secrets.DOCKER_USERNAME }}/frontend-app:${{ github.sha }}
+            docker pull ${{ secrets.DOCKER_USERNAME }}/backend-api:${{ github.sha }}
+
+            echo "==> Stopping existing containers (if running)..."
+            docker stop frontend-app  || true
+            docker stop backend-api   || true
+            docker rm   frontend-app  || true
+            docker rm   backend-api   || true
+
+            echo "==> Starting new containers..."
+            docker run -d \
+              --name frontend-app \
+              --restart unless-stopped \
+              -p 3000:3000 \
+              ${{ secrets.DOCKER_USERNAME }}/frontend-app:${{ github.sha }}
+
+            docker run -d \
+              --name backend-api \
+              --restart unless-stopped \
+              -p 3001:3000 \
+              ${{ secrets.DOCKER_USERNAME }}/backend-api:${{ github.sha }}
+
+            echo "==> Cleaning up dangling images..."
+            docker image prune -f
+
+            echo "==> Deployment complete!"
