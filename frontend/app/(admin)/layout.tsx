@@ -1,4 +1,4 @@
-import AdminLayout from '@/components/layouts/AdminLayout';
+import AdminLayout from '@/features/admin/layouts/AdminShell';
 
 /**
  * app/(admin)/layout.tsx

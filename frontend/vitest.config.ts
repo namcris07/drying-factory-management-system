@@ -8,8 +8,13 @@ export default defineConfig({
     include: ['**/*.{test,spec}.{ts,tsx}'],
     coverage: {
       provider: 'v8',
-      include: ['config/**/*.ts', 'services/**/*.ts', 'hooks/**/*.{ts,tsx}'],
-      exclude: ['**/*.{test,spec}.{ts,tsx}'],
+      include: [
+        'features/**/api/**/*.{ts,tsx}',
+        'features/**/config/**/*.{ts,tsx}',
+        'features/**/model/**/*.{ts,tsx}',
+        'shared/auth/**/*.{ts,tsx}',
+      ],
+      exclude: ['**/*.{test,spec}.{ts,tsx}', '**/*.d.ts'],
       thresholds: {
         lines: 50,
         functions: 50,

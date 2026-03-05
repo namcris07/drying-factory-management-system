@@ -1,4 +1,4 @@
-import OperatorLayout from '@/components/layouts/OperatorLayout';
+import OperatorLayout from '@/features/operator/layouts/OperatorShell';
 
 /**
  * app/(operator)/layout.tsx

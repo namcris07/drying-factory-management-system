@@ -1,4 +1,4 @@
-import MainLayout from '@/components/layouts/MainLayout';
+import MainLayout from '@/features/manager/layouts/ManagerShell';
 
 /**
  * app/(manager)/layout.tsx
