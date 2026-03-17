@@ -81,6 +81,10 @@
     "collectCoverageFrom": [
       "**/*.ts",
       "!**/*.spec.ts",
+      "!**/*.module.ts",
+      "!**/dto/*.ts",
+      "!**/*.entity.ts",
+      "!prisma/prisma.service.ts",
       "!main.ts",
       "!app.module.ts"
     ],
