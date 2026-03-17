@@ -12,7 +12,11 @@ export class SensorService {
    * The raw deviceId string (from MQTT topic) is embedded in the measurements
    * JSON until Device management is implemented.
    */
-  async processAndStoreData(deviceId: string, sensorType: string, value: number) {
+  async processAndStoreData(
+    deviceId: string,
+    sensorType: string,
+    value: number,
+  ) {
     const log = await this.prisma.sensorDataLog.create({
       data: {
         measurements: { deviceId, sensorType, value },
@@ -20,7 +24,9 @@ export class SensorService {
       },
     });
 
-    this.logger.log(`Saved sensor data -> Device: ${deviceId}, Type: ${sensorType}, Value: ${value}`);
+    this.logger.log(
+      `Saved sensor data -> Device: ${deviceId}, Type: ${sensorType}, Value: ${value}`,
+    );
     return log;
   }
 }

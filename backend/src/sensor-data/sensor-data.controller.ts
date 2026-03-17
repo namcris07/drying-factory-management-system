@@ -1,4 +1,4 @@
-import { Controller, Get, Query, ParseIntPipe } from '@nestjs/common';
+import { Controller, Get, Query } from '@nestjs/common';
 import { SensorDataService } from './sensor-data.service';
 
 @Controller('sensor-data')

@@ -1,6 +1,12 @@
 import {
-  Controller, Get, Post, Patch,
-  Param, Body, ParseIntPipe, Query,
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Param,
+  Body,
+  ParseIntPipe,
+  Query,
 } from '@nestjs/common';
 import { AlertsService } from './alerts.service';
 import { ResolveAlertDto, CreateAlertDto } from './dto/resolve-alert.dto';

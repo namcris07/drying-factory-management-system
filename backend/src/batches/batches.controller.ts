@@ -1,6 +1,12 @@
 import {
-  Controller, Get, Post, Patch, Delete,
-  Param, Body, ParseIntPipe,
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Delete,
+  Param,
+  Body,
+  ParseIntPipe,
 } from '@nestjs/common';
 import { BatchesService } from './batches.service';
 import { CreateBatchDto, UpdateBatchDto } from './dto/create-batch.dto';

@@ -28,7 +28,12 @@ export class RecipesService {
       data: {
         ...recipeData,
         steps: steps
-          ? { create: steps.map((s, i) => ({ ...s, stepNo: s.stepNo ?? i + 1 })) }
+          ? {
+              create: steps.map((s, i) => ({
+                ...s,
+                stepNo: s.stepNo ?? i + 1,
+              })),
+            }
           : undefined,
       },
       include: { steps: { orderBy: { stepNo: 'asc' } } },
@@ -37,7 +42,7 @@ export class RecipesService {
 
   async update(id: number, dto: Partial<CreateRecipeDto>) {
     await this.findOne(id);
-    const { steps, ...recipeData } = dto;
+    const { ...recipeData } = dto;
     return this.prisma.recipe.update({
       where: { recipeID: id },
       data: recipeData,

@@ -5,7 +5,7 @@
  * Quản lý Khu vực — kết nối backend thật
  */
 import { useState, useEffect } from 'react';
-import { Typography, Card, Row, Col, Button, Tag, Space, Table, Progress, Spin, App } from 'antd';
+import { Typography, Card, Row, Col, Button, Space, Table, Progress, Spin, App } from 'antd';
 import { GlobalOutlined, PlusOutlined, EditOutlined, SettingOutlined } from '@ant-design/icons';
 import { zonesApi, ApiZone } from '@/shared/lib/api';
 

@@ -1,4 +1,11 @@
-import { IsNotEmpty, IsOptional, IsString, IsInt, IsArray, ValidateNested } from 'class-validator';
+import {
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  IsInt,
+  IsArray,
+  ValidateNested,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class CreateRecipeStepDto {

@@ -5,7 +5,7 @@
  * Thư viện Công thức sấy — kết nối backend thật
  */
 import { useState, useEffect } from 'react';
-import { Typography, Card, Row, Col, Tag, Button, Space, Input, Table, Spin, App, Modal } from 'antd';
+import { Typography, Card, Row, Col, Tag, Button, Space, Input, Table, Spin, App } from 'antd';
 import { BookOutlined, PlusOutlined, SearchOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { recipesApi, ApiRecipe } from '@/shared/lib/api';
 

@@ -22,8 +22,13 @@ export class AuthService {
       throw new UnauthorizedException('Email hoặc mật khẩu không đúng.');
     }
 
-    const name = [user.firstName, user.lastName].filter(Boolean).join(' ') || user.email || 'User';
-    const zoneNames = user.zones.map((z) => z.zoneName).filter(Boolean) as string[];
+    const name =
+      [user.firstName, user.lastName].filter(Boolean).join(' ') ||
+      user.email ||
+      'User';
+    const zoneNames = user.zones
+      .map((z) => z.zoneName)
+      .filter(Boolean) as string[];
     const zone =
       user.role === 'Admin' || user.role === 'Manager'
         ? 'All Zones'

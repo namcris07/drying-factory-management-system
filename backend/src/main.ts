@@ -12,7 +12,10 @@ async function bootstrap() {
   const configService = app.get(ConfigService);
   const ioUsername = configService.get<string>('ADAFRUIT_IO_USERNAME');
   const ioKey = configService.get<string>('ADAFRUIT_IO_KEY');
-  const frontendUrl = configService.get<string>('FRONTEND_URL', 'http://localhost:3001');
+  const frontendUrl = configService.get<string>(
+    'FRONTEND_URL',
+    'http://localhost:3001',
+  );
 
   // Enable CORS for the frontend
   app.enableCors({
@@ -46,7 +49,9 @@ async function bootstrap() {
     await app.startAllMicroservices();
     logger.log('MQTT Microservice is actively listening for messages.');
   } else {
-    logger.warn('MQTT disabled — set real ADAFRUIT_IO_USERNAME and ADAFRUIT_IO_KEY in .env to enable.');
+    logger.warn(
+      'MQTT disabled — set real ADAFRUIT_IO_USERNAME and ADAFRUIT_IO_KEY in .env to enable.',
+    );
   }
 
   const port = configService.get<number>('PORT', 3000);
@@ -54,4 +59,4 @@ async function bootstrap() {
   logger.log(`HTTP Application running on: http://localhost:${port}/api`);
 }
 
-bootstrap();
+void bootstrap();

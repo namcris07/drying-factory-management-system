@@ -31,7 +31,11 @@ export class AlertsService {
 
   create(dto: CreateAlertDto) {
     return this.prisma.alert.create({
-      data: { ...dto, alertTime: new Date(), alertStatus: dto.alertStatus ?? 'pending' },
+      data: {
+        ...dto,
+        alertTime: new Date(),
+        alertStatus: dto.alertStatus ?? 'pending',
+      },
     });
   }
 
