@@ -2,28 +2,32 @@
 
 /**
  * app/(admin)/admin/zones/page.tsx
- * Quản lý Khu vực
+ * Quản lý Khu vực — kết nối backend thật
  */
-import { Typography, Card, Row, Col, Button, Tag, Space, Table, Progress } from 'antd';
+import { useState, useEffect } from 'react';
+import { Typography, Card, Row, Col, Button, Tag, Space, Table, Progress, Spin, App } from 'antd';
 import { GlobalOutlined, PlusOutlined, EditOutlined, SettingOutlined } from '@ant-design/icons';
-import { initialZones } from '@/features/admin/model/admin-data';
+import { zonesApi, ApiZone } from '@/shared/lib/api';
 
 const { Title, Text } = Typography;
 
 export default function ZoneManagementPage() {
+  const { message } = App.useApp();
+  const [zones, setZones] = useState<ApiZone[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    zonesApi.getAll()
+      .then(setZones)
+      .catch(() => message.error('Không thể tải danh sách khu vực.'))
+      .finally(() => setLoading(false));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const columns = [
-    { title: 'Mã Zone', dataIndex: 'id', width: 100 },
-    { title: 'Tên khu vực', dataIndex: 'name', render: (v: string) => <Text strong>{v}</Text> },
-    { title: 'Số máy', dataIndex: 'machineCount' },
-    {
-      title: 'Trạng thái',
-      dataIndex: 'status',
-      render: (v: string) => (
-        <Tag color={v === 'Active' ? 'success' : 'default'}>
-          {v === 'Active' ? 'Hoạt động' : 'Tạm ngưng'}
-        </Tag>
-      ),
-    },
+    { title: 'Mã Zone', dataIndex: 'zoneID', width: 100 },
+    { title: 'Tên khu vực', dataIndex: 'zoneName', render: (v: string) => <Text strong>{v}</Text> },
+    { title: 'Mô tả', dataIndex: 'zoneDescription' },
+    { title: 'Số thiết bị', key: 'devices', render: (_: unknown, r: ApiZone) => r.devices?.length ?? 0 },
     {
       title: 'Thao tác',
       key: 'action',
@@ -35,6 +39,8 @@ export default function ZoneManagementPage() {
       ),
     },
   ];
+
+  if (loading) return <div style={{ textAlign: 'center', padding: 60 }}><Spin size="large" /></div>;
 
   return (
     <div>
@@ -55,14 +61,14 @@ export default function ZoneManagementPage() {
       <Row gutter={16} style={{ marginBottom: 24 }}>
         <Col span={6}>
           <Card style={{ borderRadius: 12, textAlign: 'center' }}>
-            <div style={{ fontSize: 32, fontWeight: 700, color: '#1677ff' }}>{initialZones.length}</div>
+            <div style={{ fontSize: 32, fontWeight: 700, color: '#1677ff' }}>{zones.length}</div>
             <Text type="secondary">Tổng Zone</Text>
           </Card>
         </Col>
         <Col span={6}>
           <Card style={{ borderRadius: 12, textAlign: 'center' }}>
             <div style={{ fontSize: 32, fontWeight: 700, color: '#52c41a' }}>
-              {initialZones.filter(z => z.status === 'Active').length}
+              {zones.length}
             </div>
             <Text type="secondary">Đang hoạt động</Text>
           </Card>
@@ -70,9 +76,9 @@ export default function ZoneManagementPage() {
         <Col span={6}>
           <Card style={{ borderRadius: 12, textAlign: 'center' }}>
             <div style={{ fontSize: 32, fontWeight: 700, color: '#595959' }}>
-              {initialZones.reduce((sum, z) => sum + z.machineCount, 0)}
+              {zones.reduce((sum, z) => sum + (z.devices?.length ?? 0), 0)}
             </div>
-            <Text type="secondary">Tổng máy</Text>
+            <Text type="secondary">Tổng thiết bị</Text>
           </Card>
         </Col>
         <Col span={6}>
@@ -87,9 +93,9 @@ export default function ZoneManagementPage() {
 
       <Card style={{ borderRadius: 12 }}>
         <Table
-          dataSource={initialZones}
+          dataSource={zones}
           columns={columns}
-          rowKey="id"
+          rowKey="zoneID"
           pagination={false}
         />
       </Card>

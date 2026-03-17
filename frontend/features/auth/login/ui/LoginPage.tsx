@@ -7,13 +7,14 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Form, Input, Button, Card, Typography, Divider, Alert, Tag } from 'antd';
-import { UserOutlined, LockOutlined } from '@ant-design/icons';
+import { MailOutlined, LockOutlined } from '@ant-design/icons';
 import { UserRole, roleHomePath, setAuthSession } from '@/shared/auth/session';
+import { authApi } from '@/shared/lib/api';
 
 const { Title, Text } = Typography;
 
 type DemoAccount = {
-  username: string;
+  email: string;
   password: string;
   name: string;
   role: UserRole;
@@ -23,11 +24,11 @@ type DemoAccount = {
 };
 
 const DEMO_ACCOUNTS: DemoAccount[] = [
-  { username: 'admin',    password: 'admin123', name: 'Super Admin',    role: 'Admin',    zone: 'All Zones', label: 'Quản trị hệ thống', color: 'red'     },
-  { username: 'manager',  password: '123456',   name: 'Alex Morgan',    role: 'Manager',  zone: 'All Zones', label: 'Quản lý nhà máy',   color: 'blue'    },
-  { username: 'op_a',     password: 'op123',    name: 'Nguyễn Văn An',  role: 'Operator', zone: 'Zone A',    label: 'Vận hành Zone A',   color: 'success' },
-  { username: 'op_b',     password: 'op123',    name: 'Trần Thị Bình',  role: 'Operator', zone: 'Zone B',    label: 'Vận hành Zone B',   color: 'success' },
-  { username: 'op_c',     password: 'op123',    name: 'Lê Văn Cường',   role: 'Operator', zone: 'Zone C',    label: 'Vận hành Zone C',   color: 'success' },
+  { email: 'admin@drytech.io',   password: 'admin123', name: 'Super Admin',   role: 'Admin',    zone: 'All Zones', label: 'Quản trị hệ thống', color: 'red'     },
+  { email: 'manager@drytech.io', password: '123456',   name: 'Alex Morgan',   role: 'Manager',  zone: 'All Zones', label: 'Quản lý nhà máy',   color: 'blue'    },
+  { email: 'op_a@drytech.io',    password: 'op123',    name: 'Nguyễn Văn An', role: 'Operator', zone: 'Zone A',    label: 'Vận hành Zone A',   color: 'success' },
+  { email: 'op_b@drytech.io',    password: 'op123',    name: 'Trần Thị Bình', role: 'Operator', zone: 'Zone B',    label: 'Vận hành Zone B',   color: 'success' },
+  { email: 'op_c@drytech.io',    password: 'op123',    name: 'Lê Văn Cường',  role: 'Operator', zone: 'Zone C',    label: 'Vận hành Zone C',   color: 'success' },
 ];
 
 export default function LoginPage() {
@@ -36,25 +37,22 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [form] = Form.useForm();
 
-  const handleLogin = (values: { username: string; password: string }) => {
+  const handleLogin = async (values: { email: string; password: string }) => {
     setLoading(true);
     setError('');
-    setTimeout(() => {
-      const account = DEMO_ACCOUNTS.find(
-        a => a.username === values.username && a.password === values.password
-      );
-      if (account) {
-        setAuthSession({ name: account.name, role: account.role, zone: account.zone });
-        router.push(roleHomePath(account.role));
-      } else {
-        setError('Tên đăng nhập hoặc mật khẩu không đúng.');
-        setLoading(false);
-      }
-    }, 800);
+    try {
+      const user = await authApi.login(values.email, values.password);
+      setAuthSession({ name: user.name, role: user.role as UserRole, zone: user.zone });
+      router.push(roleHomePath(user.role as UserRole));
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Đăng nhập thất bại. Vui lòng thử lại.';
+      setError(msg);
+      setLoading(false);
+    }
   };
 
-  const fillAccount = (acc: typeof DEMO_ACCOUNTS[0]) => {
-    form.setFieldsValue({ username: acc.username, password: acc.password });
+  const fillAccount = (acc: DemoAccount) => {
+    form.setFieldsValue({ email: acc.email, password: acc.password });
     setError('');
   };
 
@@ -130,11 +128,14 @@ export default function LoginPage() {
 
           <Form form={form} layout="vertical" onFinish={handleLogin} size="large">
             <Form.Item
-              name="username"
-              label="Tên đăng nhập"
-              rules={[{ required: true, message: 'Vui lòng nhập tên đăng nhập!' }]}
+              name="email"
+              label="Email"
+              rules={[
+                { required: true, message: 'Vui lòng nhập email!' },
+                { type: 'email', message: 'Email không hợp lệ!' },
+              ]}
             >
-              <Input prefix={<UserOutlined />} placeholder="Nhập tên đăng nhập" />
+              <Input prefix={<MailOutlined />} placeholder="email@drytech.io" />
             </Form.Item>
             <Form.Item
               name="password"
@@ -164,7 +165,7 @@ export default function LoginPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {DEMO_ACCOUNTS.map(acc => (
               <div
-                key={acc.username}
+                key={acc.email}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -183,7 +184,7 @@ export default function LoginPage() {
                 <div>
                   <div style={{ fontSize: 12, fontWeight: 600, color: '#262626' }}>{acc.label}</div>
                   <div style={{ fontSize: 11, color: '#8c8c8c', fontFamily: 'monospace' }}>
-                    {acc.username} / {acc.password}
+                    {acc.email} / {acc.password}
                   </div>
                 </div>
                 <Tag color={acc.color as "red" | "blue" | "success"} style={{ borderRadius: 10, fontSize: 11, margin: 0 }}>

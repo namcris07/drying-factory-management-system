@@ -1,0 +1,225 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─────────────────────────────────────────────
+// User & Access
+// ─────────────────────────────────────────────
+
+model User {
+  userID      Int       @id @default(autoincrement())
+  password    String?
+  email       String?
+  phoneNumber String?   @map("PhoneNumber")
+  dateOfBirth DateTime? @db.Date
+  gender      String?
+  firstName   String?
+  lastName    String?
+  status      String?
+  createdAt   DateTime? @db.Timestamptz
+  role        String?   @map("Role")
+
+  zones               Zone[]
+  recipes             Recipe[]
+  recipeModifications RecipeModification[]
+  batchOperations     BatchOperation[]
+  alertResolutions    AlertResolution[]
+  systemConfigUpdates SystemConfigUpdate[]
+
+  @@map("User")
+}
+
+// ─────────────────────────────────────────────
+// Zone & Device
+// ─────────────────────────────────────────────
+
+model Zone {
+  zoneID          Int     @id @default(autoincrement()) @map("ZoneID")
+  zoneName        String? @map("ZoneName")
+  zoneDescription String? @map("ZoneDescription")
+  userID          Int?    @map("userID")
+
+  user    User?    @relation(fields: [userID], references: [userID])
+  devices Device[]
+
+  @@map("Zones")
+}
+
+model Device {
+  deviceID        Int     @id @default(autoincrement()) @map("DeviceID")
+  deviceName      String? @map("DeviceName")
+  deviceStatus    String? @map("DeviceStatus")
+  mqttTopicSensor String? @map("MQTTTopicSensor")
+  mqttTopicCmd    String? @map("MQTTTopicCmd")
+  deviceType      String? @map("DeviceType")
+  metaData        Json?   @map("MetaData")
+  zoneID          Int?    @map("ZoneID")
+
+  zone       Zone?           @relation(fields: [zoneID], references: [zoneID])
+  batches    Batch[]
+  sensorLogs SensorDataLog[]
+  alerts     Alert[]
+
+  @@map("Devices")
+}
+
+// ─────────────────────────────────────────────
+// Recipe & Steps
+// ─────────────────────────────────────────────
+
+model Recipe {
+  recipeID        Int     @id @default(autoincrement()) @map("RecipeID")
+  recipeName      String? @map("RecipeName")
+  recipeFruits    String? @map("RecipeFruits")
+  timeDurationEst Int?    @map("TimeDurationEst")
+  userID          Int?    @map("userID")
+
+  user                User?                @relation(fields: [userID], references: [userID])
+  steps               RecipeStep[]
+  batches             Batch[]
+  recipeModifications RecipeModification[]
+
+  @@map("Recipes")
+}
+
+model RecipeStep {
+  stepID          Int     @id @default(autoincrement()) @map("StepID")
+  recipeID        Int?    @map("RecipeID")
+  stepNo          Int?    @map("StepNo")
+  temperatureGoal Float?  @map("TemperatureGoal")
+  humidityGoal    Float?  @map("HumidityGoal")
+  durationMinutes Int?    @map("DurationMinutes")
+  fanStatus       String? @map("FanStatus")
+  stepStatus      String? @map("StepStatus")
+
+  recipe Recipe? @relation(fields: [recipeID], references: [recipeID])
+
+  @@map("RecipeSteps")
+}
+
+model RecipeModification {
+  rmID       Int       @id @default(autoincrement()) @map("RM_ID")
+  userID     Int?      @map("userID")
+  recipeID   Int?      @map("RecipeID")
+  modifiedAt DateTime? @db.Timestamptz @map("ModifiedAt")
+
+  user   User?   @relation(fields: [userID], references: [userID])
+  recipe Recipe? @relation(fields: [recipeID], references: [recipeID])
+
+  @@map("RecipeModification")
+}
+
+// ─────────────────────────────────────────────
+// Batch & Operations
+// ─────────────────────────────────────────────
+
+model Batch {
+  batchesID     Int     @id @default(autoincrement()) @map("BatchesID")
+  batchStatus   String? @map("BatchStatus")
+  batchResult   String? @map("BatchResult")
+  operationMode String? @map("OperationMode")
+  currentStep   Int?    @map("CurrentStep")
+  recipeID      Int?    @map("RecipeID")
+  deviceID      Int?    @map("DeviceID")
+
+  recipe          Recipe?          @relation(fields: [recipeID], references: [recipeID])
+  device          Device?          @relation(fields: [deviceID], references: [deviceID])
+  batchOperations BatchOperation[]
+  alerts          Alert[]
+
+  @@map("Batches")
+}
+
+model BatchOperation {
+  boID      Int       @id @default(autoincrement()) @map("BO_ID")
+  userID    Int?      @map("userID")
+  batchesID Int?      @map("BatchesID")
+  startedAt DateTime? @db.Timestamptz @map("StartedAt")
+  endedAt   DateTime? @db.Timestamptz @map("EndedAt")
+
+  user  User?  @relation(fields: [userID], references: [userID])
+  batch Batch? @relation(fields: [batchesID], references: [batchesID])
+
+  @@map("BatchOperation")
+}
+
+// ─────────────────────────────────────────────
+// Sensor
+// ─────────────────────────────────────────────
+
+model SensorDataLog {
+  logID        Int       @id @default(autoincrement()) @map("LogID")
+  measurements Json?     @map("Measurements")
+  logTimestamp DateTime? @db.Timestamptz @map("LogTimestamp")
+  deviceID     Int?      @map("DeviceID")
+
+  device Device? @relation(fields: [deviceID], references: [deviceID])
+
+  @@map("SensorDataLog")
+}
+
+// ─────────────────────────────────────────────
+// System Config
+// ─────────────────────────────────────────────
+
+model SystemConfig {
+  configKey   String  @id @map("ConfigKey")
+  configValue String? @map("ConfigValue")
+
+  systemConfigUpdates SystemConfigUpdate[]
+
+  @@map("SystemConfig")
+}
+
+model SystemConfigUpdate {
+  scuID     Int       @id @default(autoincrement()) @map("SCU_ID")
+  userID    Int?      @map("userID")
+  configKey String?   @map("ConfigKey")
+  updatedAt DateTime? @db.Timestamptz @map("UpdatedAt")
+
+  user         User?         @relation(fields: [userID], references: [userID])
+  systemConfig SystemConfig? @relation(fields: [configKey], references: [configKey])
+
+  @@map("SystemConfigUpdate")
+}
+
+// ─────────────────────────────────────────────
+// Alerts
+// ─────────────────────────────────────────────
+
+model Alert {
+  alertID      Int       @id @default(autoincrement()) @map("AlertID")
+  alertType    String?   @map("AlertType")
+  alertMessage String?   @map("AlertMessage")
+  alertTime    DateTime? @db.Timestamptz @map("AlertTime")
+  alertStatus  String?   @map("AlertStatus")
+  deviceID     Int?      @map("DeviceID")
+  batchesID    Int?      @map("BatchesID")
+
+  device           Device?           @relation(fields: [deviceID], references: [deviceID])
+  batch            Batch?            @relation(fields: [batchesID], references: [batchesID])
+  alertResolutions AlertResolution[]
+
+  @@map("Alerts")
+}
+
+model AlertResolution {
+  arID          Int       @id @default(autoincrement()) @map("AR_ID")
+  userID        Int?      @map("userID")
+  alertID       Int?      @map("AlertID")
+  resolveTime   DateTime? @db.Timestamptz @map("ResolveTime")
+  resolveStatus String?   @map("ResolveStatus")
+  resolveNote   String?   @map("ResolveNote")
+
+  user  User?  @relation(fields: [userID], references: [userID])
+  alert Alert? @relation(fields: [alertID], references: [alertID])
+
+  @@map("AlertResolution")
+}

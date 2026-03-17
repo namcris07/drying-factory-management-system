@@ -2,28 +2,51 @@
 
 /**
  * app/(admin)/admin/devices/page.tsx
- * Cấu hình Thiết bị IoT
+ * Cấu hình Thiết bị IoT — kết nối backend thật
  */
-import { Typography, Card, Table, Tag, Button, Space, Badge } from 'antd';
+import { useState, useEffect } from 'react';
+import { Typography, Card, Table, Tag, Button, Space, Badge, Spin, App } from 'antd';
 import { ApiOutlined, PlusOutlined, EditOutlined, SyncOutlined } from '@ant-design/icons';
-import { initialDevices } from '@/features/admin/model/admin-data';
+import { devicesApi, ApiDevice } from '@/shared/lib/api';
 
 const { Title, Text } = Typography;
 
 export default function IoTDeviceConfigPage() {
+  const { message } = App.useApp();
+  const [devices, setDevices] = useState<ApiDevice[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    devicesApi.getAll()
+      .then(setDevices)
+      .catch(() => message.error('Không thể tải danh sách thiết bị.'))
+      .finally(() => setLoading(false));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const columns = [
-    { title: 'Mã thiết bị', dataIndex: 'id', width: 120 },
-    { title: 'Tên', dataIndex: 'name', render: (v: string) => <Text strong>{v}</Text> },
-    { title: 'Loại', dataIndex: 'type', render: (v: string) => <Tag>{v}</Tag> },
-    { title: 'Zone', dataIndex: 'zone' },
+    { title: 'ID', dataIndex: 'deviceID', width: 80 },
+    { title: 'Tên', dataIndex: 'deviceName', render: (v: string) => <Text strong>{v}</Text> },
+    { title: 'Loại', dataIndex: 'deviceType', render: (v: string) => <Tag>{v}</Tag> },
+    {
+      title: 'Zone',
+      key: 'zone',
+      render: (_: unknown, r: ApiDevice) => r.zone?.zoneName ?? '—',
+    },
     {
       title: 'Kết nối',
-      dataIndex: 'connected',
-      render: (v: boolean) => (
-        <Badge status={v ? 'success' : 'error'} text={v ? 'Online' : 'Offline'} />
+      dataIndex: 'deviceStatus',
+      render: (v: string) => (
+        <Badge
+          status={v === 'Active' ? 'success' : 'error'}
+          text={v === 'Active' ? 'Online' : 'Offline'}
+        />
       ),
     },
-    { title: 'Cập nhật lần cuối', dataIndex: 'lastSeen' },
+    {
+      title: 'MQTT Sensor Topic',
+      dataIndex: 'mqttTopicSensor',
+      render: (v: string) => <Text code style={{ fontSize: 11 }}>{v}</Text>,
+    },
     {
       title: 'Thao tác',
       key: 'action',
@@ -35,6 +58,8 @@ export default function IoTDeviceConfigPage() {
       ),
     },
   ];
+
+  if (loading) return <div style={{ textAlign: 'center', padding: 60 }}><Spin size="large" /></div>;
 
   return (
     <div>
@@ -54,21 +79,21 @@ export default function IoTDeviceConfigPage() {
       {/* Stats */}
       <Space style={{ marginBottom: 24 }}>
         <Tag color="success" style={{ padding: '8px 16px', fontSize: 14 }}>
-          🟢 Online: {initialDevices.filter(d => d.connected).length}
+          🟢 Online: {devices.filter(d => d.deviceStatus === 'Active').length}
         </Tag>
         <Tag color="error" style={{ padding: '8px 16px', fontSize: 14 }}>
-          🔴 Offline: {initialDevices.filter(d => !d.connected).length}
+          🔴 Offline: {devices.filter(d => d.deviceStatus !== 'Active').length}
         </Tag>
         <Tag style={{ padding: '8px 16px', fontSize: 14 }}>
-          📡 Tổng: {initialDevices.length}
+          📡 Tổng: {devices.length}
         </Tag>
       </Space>
 
       <Card style={{ borderRadius: 12 }}>
         <Table
-          dataSource={initialDevices}
+          dataSource={devices}
           columns={columns}
-          rowKey="id"
+          rowKey="deviceID"
           pagination={{ pageSize: 10 }}
         />
       </Card>

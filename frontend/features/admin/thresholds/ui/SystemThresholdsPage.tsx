@@ -2,26 +2,92 @@
 
 /**
  * app/(admin)/admin/thresholds/page.tsx
- * Thiết lập Ngưỡng Hệ thống
+ * Thiết lập Ngưỡng Hệ thống — kết nối backend thật
  */
-import { Typography, Card, Form, InputNumber, Button, Row, Col, Alert, Space, Switch } from 'antd';
+import { Typography, Card, Form, InputNumber, Button, Row, Col, Alert, Space, Switch, Spin, App } from 'antd';
 import { SettingOutlined, SaveOutlined, ReloadOutlined } from '@ant-design/icons';
-import { useState } from 'react';
-import { initialThresholds, SystemThresholds } from '@/features/admin/model/admin-data';
+import { useState, useEffect } from 'react';
+import { systemConfigApi } from '@/shared/lib/api';
 
 const { Title, Text } = Typography;
 
+type SystemThresholds = {
+  maxTempSafe: number;
+  minHumidity: number;
+  maxHumidity: number;
+  autoStopEnabled: boolean;
+  alertDelaySeconds: number;
+  mqttBrokerHost: string;
+  mqttBrokerPort: number;
+  mqttKeepAlive: number;
+  dataRetentionDays: number;
+  batchAutoArchiveDays: number;
+  lightSensorThreshold: number;
+  doorOpenTimeout: number;
+};
+
+const DEFAULT: SystemThresholds = {
+  maxTempSafe: 90, minHumidity: 8, maxHumidity: 85,
+  autoStopEnabled: true, alertDelaySeconds: 15,
+  mqttBrokerHost: 'mqtt.drytech.internal', mqttBrokerPort: 1883, mqttKeepAlive: 60,
+  dataRetentionDays: 365, batchAutoArchiveDays: 90, lightSensorThreshold: 500, doorOpenTimeout: 5,
+};
+
+function fromRecord(rec: Record<string, string>): SystemThresholds {
+  return {
+    maxTempSafe: Number(rec.maxTempSafe ?? DEFAULT.maxTempSafe),
+    minHumidity: Number(rec.minHumidity ?? DEFAULT.minHumidity),
+    maxHumidity: Number(rec.maxHumidity ?? DEFAULT.maxHumidity),
+    autoStopEnabled: (rec.autoStopEnabled ?? 'true') === 'true',
+    alertDelaySeconds: Number(rec.alertDelaySeconds ?? DEFAULT.alertDelaySeconds),
+    mqttBrokerHost: rec.mqttBrokerHost ?? DEFAULT.mqttBrokerHost,
+    mqttBrokerPort: Number(rec.mqttBrokerPort ?? DEFAULT.mqttBrokerPort),
+    mqttKeepAlive: Number(rec.mqttKeepAlive ?? DEFAULT.mqttKeepAlive),
+    dataRetentionDays: Number(rec.dataRetentionDays ?? DEFAULT.dataRetentionDays),
+    batchAutoArchiveDays: Number(rec.batchAutoArchiveDays ?? DEFAULT.batchAutoArchiveDays),
+    lightSensorThreshold: Number(rec.lightSensorThreshold ?? DEFAULT.lightSensorThreshold),
+    doorOpenTimeout: Number(rec.doorOpenTimeout ?? DEFAULT.doorOpenTimeout),
+  };
+}
+
+function toRecord(t: SystemThresholds): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(t).map(([k, v]) => [k, String(v)])
+  );
+}
+
 export default function SystemThresholdsPage() {
-  const [thresholds, setThresholds] = useState<SystemThresholds>(initialThresholds);
+  const { message } = App.useApp();
+  const [thresholds, setThresholds] = useState<SystemThresholds>(DEFAULT);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
-  const handleSave = () => {
-    // Save logic here
-    console.log('Saving thresholds:', thresholds);
+  const loadConfig = async () => {
+    try {
+      const rec = await systemConfigApi.getAll();
+      setThresholds(fromRecord(rec));
+    } catch {
+      message.error('Không thể tải cấu hình hệ thống.');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleReset = () => {
-    setThresholds(initialThresholds);
+  useEffect(() => { loadConfig(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await systemConfigApi.saveAll(toRecord(thresholds));
+      message.success('Đã lưu cấu hình thành công.');
+    } catch {
+      message.error('Lưu cấu hình thất bại.');
+    } finally {
+      setSaving(false);
+    }
   };
+
+  if (loading) return <div style={{ textAlign: 'center', padding: 60 }}><Spin size="large" /></div>;
 
   return (
     <div>
@@ -34,8 +100,8 @@ export default function SystemThresholdsPage() {
           <Text type="secondary">Cấu hình các ngưỡng cảnh báo và giới hạn vận hành</Text>
         </div>
         <Space>
-          <Button icon={<ReloadOutlined />} onClick={handleReset}>Khôi phục mặc định</Button>
-          <Button type="primary" icon={<SaveOutlined />} onClick={handleSave}>
+          <Button icon={<ReloadOutlined />} onClick={() => { setThresholds(DEFAULT); }}>Khôi phục mặc định</Button>
+          <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={saving}>
             Lưu thay đổi
           </Button>
         </Space>
@@ -54,40 +120,16 @@ export default function SystemThresholdsPage() {
           <Card title="🌡️ Ngưỡng Nhiệt độ & Độ ẩm" style={{ borderRadius: 12, marginBottom: 24 }}>
             <Form layout="vertical">
               <Form.Item label="Nhiệt độ an toàn tối đa (°C)">
-                <InputNumber
-                  value={thresholds.maxTempSafe}
-                  onChange={(v) => setThresholds({ ...thresholds, maxTempSafe: v || 0 })}
-                  style={{ width: '100%' }}
-                  min={0}
-                  max={150}
-                />
+                <InputNumber value={thresholds.maxTempSafe} onChange={(v) => setThresholds({ ...thresholds, maxTempSafe: v || 0 })} style={{ width: '100%' }} min={0} max={150} />
               </Form.Item>
               <Form.Item label="Độ ẩm tối thiểu (%)">
-                <InputNumber
-                  value={thresholds.minHumidity}
-                  onChange={(v) => setThresholds({ ...thresholds, minHumidity: v || 0 })}
-                  style={{ width: '100%' }}
-                  min={0}
-                  max={100}
-                />
+                <InputNumber value={thresholds.minHumidity} onChange={(v) => setThresholds({ ...thresholds, minHumidity: v || 0 })} style={{ width: '100%' }} min={0} max={100} />
               </Form.Item>
               <Form.Item label="Độ ẩm tối đa (%)">
-                <InputNumber
-                  value={thresholds.maxHumidity}
-                  onChange={(v) => setThresholds({ ...thresholds, maxHumidity: v || 0 })}
-                  style={{ width: '100%' }}
-                  min={0}
-                  max={100}
-                />
+                <InputNumber value={thresholds.maxHumidity} onChange={(v) => setThresholds({ ...thresholds, maxHumidity: v || 0 })} style={{ width: '100%' }} min={0} max={100} />
               </Form.Item>
               <Form.Item label="Ngưỡng cảm biến ánh sáng">
-                <InputNumber
-                  value={thresholds.lightSensorThreshold}
-                  onChange={(v) => setThresholds({ ...thresholds, lightSensorThreshold: v || 0 })}
-                  style={{ width: '100%' }}
-                  min={0}
-                  max={1024}
-                />
+                <InputNumber value={thresholds.lightSensorThreshold} onChange={(v) => setThresholds({ ...thresholds, lightSensorThreshold: v || 0 })} style={{ width: '100%' }} min={0} max={1024} />
               </Form.Item>
             </Form>
           </Card>
@@ -100,22 +142,10 @@ export default function SystemThresholdsPage() {
                 <Text code>{thresholds.mqttBrokerHost}</Text>
               </Form.Item>
               <Form.Item label="MQTT Broker Port">
-                <InputNumber
-                  value={thresholds.mqttBrokerPort}
-                  onChange={(v) => setThresholds({ ...thresholds, mqttBrokerPort: v || 1883 })}
-                  style={{ width: '100%' }}
-                  min={1}
-                  max={65535}
-                />
+                <InputNumber value={thresholds.mqttBrokerPort} onChange={(v) => setThresholds({ ...thresholds, mqttBrokerPort: v || 1883 })} style={{ width: '100%' }} min={1} max={65535} />
               </Form.Item>
               <Form.Item label="MQTT Keep Alive (giây)">
-                <InputNumber
-                  value={thresholds.mqttKeepAlive}
-                  onChange={(v) => setThresholds({ ...thresholds, mqttKeepAlive: v || 60 })}
-                  style={{ width: '100%' }}
-                  min={10}
-                  max={300}
-                />
+                <InputNumber value={thresholds.mqttKeepAlive} onChange={(v) => setThresholds({ ...thresholds, mqttKeepAlive: v || 60 })} style={{ width: '100%' }} min={10} max={300} />
               </Form.Item>
             </Form>
           </Card>
@@ -127,22 +157,10 @@ export default function SystemThresholdsPage() {
           <Card title="⏱️ Ngưỡng Thời gian" style={{ borderRadius: 12, marginBottom: 24 }}>
             <Form layout="vertical">
               <Form.Item label="Độ trễ cảnh báo (giây)">
-                <InputNumber
-                  value={thresholds.alertDelaySeconds}
-                  onChange={(v) => setThresholds({ ...thresholds, alertDelaySeconds: v || 0 })}
-                  style={{ width: '100%' }}
-                  min={0}
-                  max={300}
-                />
+                <InputNumber value={thresholds.alertDelaySeconds} onChange={(v) => setThresholds({ ...thresholds, alertDelaySeconds: v || 0 })} style={{ width: '100%' }} min={0} max={300} />
               </Form.Item>
               <Form.Item label="Thời gian chờ mở cửa (phút)">
-                <InputNumber
-                  value={thresholds.doorOpenTimeout}
-                  onChange={(v) => setThresholds({ ...thresholds, doorOpenTimeout: v || 0 })}
-                  style={{ width: '100%' }}
-                  min={1}
-                  max={60}
-                />
+                <InputNumber value={thresholds.doorOpenTimeout} onChange={(v) => setThresholds({ ...thresholds, doorOpenTimeout: v || 0 })} style={{ width: '100%' }} min={1} max={60} />
               </Form.Item>
             </Form>
           </Card>
@@ -152,22 +170,10 @@ export default function SystemThresholdsPage() {
           <Card title="📊 Lưu trữ dữ liệu" style={{ borderRadius: 12, marginBottom: 24 }}>
             <Form layout="vertical">
               <Form.Item label="Thời gian lưu trữ dữ liệu (ngày)">
-                <InputNumber
-                  value={thresholds.dataRetentionDays}
-                  onChange={(v) => setThresholds({ ...thresholds, dataRetentionDays: v || 365 })}
-                  style={{ width: '100%' }}
-                  min={30}
-                  max={3650}
-                />
+                <InputNumber value={thresholds.dataRetentionDays} onChange={(v) => setThresholds({ ...thresholds, dataRetentionDays: v || 365 })} style={{ width: '100%' }} min={30} max={3650} />
               </Form.Item>
               <Form.Item label="Tự động lưu trữ batch sau (ngày)">
-                <InputNumber
-                  value={thresholds.batchAutoArchiveDays}
-                  onChange={(v) => setThresholds({ ...thresholds, batchAutoArchiveDays: v || 90 })}
-                  style={{ width: '100%' }}
-                  min={7}
-                  max={365}
-                />
+                <InputNumber value={thresholds.batchAutoArchiveDays} onChange={(v) => setThresholds({ ...thresholds, batchAutoArchiveDays: v || 90 })} style={{ width: '100%' }} min={7} max={365} />
               </Form.Item>
               <Form.Item label="Tự động dừng khi vượt ngưỡng">
                 <Switch

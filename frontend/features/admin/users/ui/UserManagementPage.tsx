@@ -2,23 +2,23 @@
 
 /**
  * app/(admin)/admin/users/page.tsx
- * Quản lý người dùng và phân quyền
+ * Quản lý người dùng và phân quyền — kết nối backend thật
  */
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Table, Button, Tag, Space, Modal, Form, Input, Select,
-  Typography, Tooltip, Divider, App, Avatar,
+  Typography, Tooltip, Divider, App, Avatar, Spin,
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, UserOutlined,
   MailOutlined, LockOutlined, CheckCircleOutlined, StopOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import { initialUsers, AppUser, UserRole } from '@/features/admin/model/admin-data';
+import { usersApi, ApiUser } from '@/shared/lib/api';
 
 const { Title, Text } = Typography;
 
-const ZONES = ['Zone A', 'Zone B', 'Zone C', 'Zone D', 'Zone E'];
+type UserRole = 'Admin' | 'Manager' | 'Operator';
 const ROLES: UserRole[] = ['Admin', 'Manager', 'Operator'];
 
 const roleCfg: Record<UserRole, { color: string; bg: string; border: string }> = {
@@ -27,20 +27,39 @@ const roleCfg: Record<UserRole, { color: string; bg: string; border: string }> =
   Operator: { color: '#389e0d', bg: '#f6ffed', border: '#b7eb8f' },
 };
 
-let nextId = 100;
+function displayName(u: ApiUser) {
+  return [u.firstName, u.lastName].filter(Boolean).join(' ') || u.email || '—';
+}
 
 export default function UserManagementPage() {
   const { message, modal } = App.useApp();
-  const [users, setUsers] = useState<AppUser[]>(initialUsers);
+  const [users, setUsers] = useState<ApiUser[]>([]);
+  const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
-  const [editingUser, setEditingUser] = useState<AppUser | null>(null);
+  const [editingUser, setEditingUser] = useState<ApiUser | null>(null);
+  const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
   const [search, setSearch] = useState('');
 
-  const filtered = users.filter(u =>
-    u.name.toLowerCase().includes(search.toLowerCase()) ||
-    u.email.toLowerCase().includes(search.toLowerCase())
-  );
+  const loadUsers = async () => {
+    try {
+      const data = await usersApi.getAll();
+      setUsers(data);
+    } catch {
+      message.error('Không thể tải danh sách người dùng.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadUsers(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const filtered = users.filter(u => {
+    const name = displayName(u).toLowerCase();
+    const email = (u.email ?? '').toLowerCase();
+    const q = search.toLowerCase();
+    return name.includes(q) || email.includes(q);
+  });
 
   const openCreate = () => {
     setEditingUser(null);
@@ -48,60 +67,72 @@ export default function UserManagementPage() {
     setModalOpen(true);
   };
 
-  const openEdit = (user: AppUser) => {
+  const openEdit = (user: ApiUser) => {
     setEditingUser(user);
-    form.setFieldsValue({ ...user });
+    form.setFieldsValue({
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      role: user.role,
+    });
     setModalOpen(true);
   };
 
   const handleSave = async () => {
     try {
       const values = await form.validateFields();
+      setSaving(true);
       if (editingUser) {
-        setUsers(prev => prev.map(u => u.id === editingUser.id ? { ...u, ...values } : u));
+        await usersApi.update(editingUser.userID, values);
         message.success('Đã cập nhật thông tin người dùng.');
       } else {
-        const newUser: AppUser = {
-          id: `u${++nextId}`,
-          ...values,
-          status: 'Active',
-          createdAt: new Date().toISOString().slice(0, 10),
-          lastLogin: '—',
-        };
-        setUsers(prev => [newUser, ...prev]);
-        message.success(`Tài khoản "${newUser.name}" đã được tạo và có hiệu lực ngay.`);
+        await usersApi.create(values);
+        message.success(`Tài khoản đã được tạo.`);
       }
       setModalOpen(false);
+      await loadUsers();
     } catch {
-      /* validation error */
+      // validation or API error — message already shown or form shows inline
+    } finally {
+      setSaving(false);
     }
   };
 
-  const handleDelete = (user: AppUser) => {
+  const handleDelete = (user: ApiUser) => {
     if (user.role === 'Admin') {
       message.error('Không thể xóa tài khoản Admin.');
       return;
     }
     modal.confirm({
-      title: `Xóa tài khoản "${user.name}"?`,
-      content: 'Hành động này không thể hoàn tác. Lịch sử hoạt động của người dùng vẫn được giữ lại.',
+      title: `Xóa tài khoản "${displayName(user)}"?`,
+      content: 'Hành động này không thể hoàn tác.',
       okText: 'Xóa',
       okButtonProps: { danger: true },
       cancelText: 'Hủy',
-      onOk: () => {
-        setUsers(prev => prev.filter(u => u.id !== user.id));
-        message.success('Đã xóa tài khoản.');
+      onOk: async () => {
+        try {
+          await usersApi.remove(user.userID);
+          message.success('Đã xóa tài khoản.');
+          await loadUsers();
+        } catch {
+          message.error('Xóa tài khoản thất bại.');
+        }
       },
     });
   };
 
-  const toggleStatus = (user: AppUser) => {
+  const toggleStatus = async (user: ApiUser) => {
     const next = user.status === 'Active' ? 'Inactive' : 'Active';
-    setUsers(prev => prev.map(u => u.id === user.id ? { ...u, status: next } : u));
-    message.info(`Tài khoản "${user.name}" → ${next}.`);
+    try {
+      await usersApi.update(user.userID, { status: next });
+      message.info(`Tài khoản "${displayName(user)}" → ${next}.`);
+      await loadUsers();
+    } catch {
+      message.error('Cập nhật trạng thái thất bại.');
+    }
   };
 
-  const columns: ColumnsType<AppUser> = [
+  const columns: ColumnsType<ApiUser> = [
     {
       title: 'Người dùng',
       key: 'user',
@@ -109,12 +140,12 @@ export default function UserManagementPage() {
       render: (_, r) => (
         <Space>
           <Avatar
-            style={{ background: roleCfg[r.role].color, flexShrink: 0 }}
+            style={{ background: roleCfg[(r.role as UserRole) ?? 'Operator']?.color ?? '#1677ff', flexShrink: 0 }}
             icon={<UserOutlined />}
             size={36}
           />
           <div>
-            <Text strong style={{ display: 'block', lineHeight: 1.4 }}>{r.name}</Text>
+            <Text strong style={{ display: 'block', lineHeight: 1.4 }}>{displayName(r)}</Text>
             <Text type="secondary" style={{ fontSize: 12 }}>
               <MailOutlined style={{ marginRight: 4 }} />{r.email}
             </Text>
@@ -128,28 +159,37 @@ export default function UserManagementPage() {
       width: 110,
       filters: ROLES.map(r => ({ text: r, value: r })),
       onFilter: (val, r) => r.role === val,
-      render: (role: UserRole) => (
-        <Tag
-          style={{
-            borderRadius: 12,
-            border: `1px solid ${roleCfg[role].border}`,
-            background: roleCfg[role].bg,
-            color: roleCfg[role].color,
-            fontWeight: 700,
-            padding: '2px 10px',
-          }}
-        >
-          {role}
-        </Tag>
-      ),
+      render: (role: string) => {
+        const cfg = roleCfg[role as UserRole] ?? { color: '#595959', bg: '#fafafa', border: '#f0f0f0' };
+        return (
+          <Tag
+            style={{
+              borderRadius: 12,
+              border: `1px solid ${cfg.border}`,
+              background: cfg.bg,
+              color: cfg.color,
+              fontWeight: 700,
+              padding: '2px 10px',
+            }}
+          >
+            {role}
+          </Tag>
+        );
+      },
     },
     {
       title: 'Khu vực phụ trách',
-      dataIndex: 'zones',
-      render: (zones: string[]) =>
-        zones.length === 0
+      key: 'zones',
+      render: (_, r) => {
+        const zones = r.zones ?? [];
+        return zones.length === 0
           ? <Text type="secondary" style={{ fontSize: 12 }}>Tất cả (Admin)</Text>
-          : zones.map(z => <Tag key={z} color="blue" style={{ borderRadius: 10, margin: '2px 3px 2px 0' }}>{z}</Tag>),
+          : zones.map(z => (
+              <Tag key={z.zoneID} color="blue" style={{ borderRadius: 10, margin: '2px 3px 2px 0' }}>
+                {z.zoneName}
+              </Tag>
+            ));
+      },
     },
     {
       title: 'Trạng thái',
@@ -157,7 +197,7 @@ export default function UserManagementPage() {
       width: 110,
       filters: [{ text: 'Active', value: 'Active' }, { text: 'Inactive', value: 'Inactive' }],
       onFilter: (val, r) => r.status === val,
-      render: (status, record) => (
+      render: (status: string, record) => (
         <Tooltip title={`Nhấn để ${status === 'Active' ? 'vô hiệu hóa' : 'kích hoạt'}`}>
           <Tag
             color={status === 'Active' ? 'success' : 'default'}
@@ -169,12 +209,6 @@ export default function UserManagementPage() {
           </Tag>
         </Tooltip>
       ),
-    },
-    {
-      title: 'Đăng nhập cuối',
-      dataIndex: 'lastLogin',
-      width: 160,
-      render: v => <Text type="secondary" style={{ fontSize: 12 }}>{v}</Text>,
     },
     {
       title: 'Thao tác',
@@ -199,6 +233,10 @@ export default function UserManagementPage() {
       ),
     },
   ];
+
+  if (loading) {
+    return <div style={{ textAlign: 'center', padding: 60 }}><Spin size="large" /></div>;
+  }
 
   return (
     <div>
@@ -267,7 +305,7 @@ export default function UserManagementPage() {
         <Table
           dataSource={filtered}
           columns={columns}
-          rowKey="id"
+          rowKey="userID"
           pagination={{ pageSize: 10, showSizeChanger: false }}
           rowClassName={r => r.status === 'Inactive' ? 'opacity-50' : ''}
           style={{ borderRadius: 14 }}
@@ -279,7 +317,7 @@ export default function UserManagementPage() {
         title={
           <Space>
             <UserOutlined style={{ color: '#1677ff' }} />
-            {editingUser ? `Chỉnh sửa: ${editingUser.name}` : 'Thêm người dùng mới'}
+            {editingUser ? `Chỉnh sửa: ${displayName(editingUser)}` : 'Thêm người dùng mới'}
           </Space>
         }
         open={modalOpen}
@@ -287,6 +325,7 @@ export default function UserManagementPage() {
         onCancel={() => setModalOpen(false)}
         okText={editingUser ? 'Lưu thay đổi' : 'Tạo tài khoản'}
         cancelText="Hủy"
+        confirmLoading={saving}
         forceRender
         width={520}
         destroyOnClose
@@ -294,8 +333,11 @@ export default function UserManagementPage() {
       >
         <Divider style={{ margin: '12px 0 20px' }} />
         <Form form={form} layout="vertical" size="large">
-          <Form.Item name="name" label="Họ và tên" rules={[{ required: true, message: 'Vui lòng nhập họ tên!' }]}>
-            <Input prefix={<UserOutlined />} placeholder="Nguyễn Văn A" />
+          <Form.Item name="firstName" label="Họ và tên đệm" rules={[{ required: true, message: 'Bắt buộc!' }]}>
+            <Input prefix={<UserOutlined />} placeholder="Nguyễn Văn" />
+          </Form.Item>
+          <Form.Item name="lastName" label="Tên" rules={[{ required: true, message: 'Bắt buộc!' }]}>
+            <Input placeholder="An" />
           </Form.Item>
           <Form.Item
             name="email"
@@ -319,42 +361,8 @@ export default function UserManagementPage() {
           <Form.Item name="role" label="Vai trò" rules={[{ required: true, message: 'Chọn vai trò!' }]}>
             <Select
               placeholder="Chọn vai trò..."
-              options={ROLES.map(r => ({
-                value: r,
-                label: (
-                  <Space>
-                    <span
-                      style={{
-                        display: 'inline-block',
-                        width: 8,
-                        height: 8,
-                        borderRadius: '50%',
-                        background: roleCfg[r].color,
-                      }}
-                    />
-                    {r}
-                  </Space>
-                ),
-              }))}
+              options={ROLES.map(r => ({ value: r, label: r }))}
             />
-          </Form.Item>
-          <Form.Item
-            noStyle
-            shouldUpdate={(prev, cur) => prev.role !== cur.role}
-          >
-            {({ getFieldValue }) =>
-              getFieldValue('role') !== 'Admin' ? (
-                <Form.Item name="zones" label="Khu vực phụ trách" rules={[{ required: true, message: 'Chọn ít nhất 1 Zone!' }]}>
-                  <Select mode="multiple" placeholder="Chọn khu vực..." options={ZONES.map(z => ({ value: z, label: z }))} />
-                </Form.Item>
-              ) : (
-                <div style={{ padding: '8px 12px', background: '#fff0f0', borderRadius: 8, marginBottom: 16 }}>
-                  <Text style={{ color: '#cf1322', fontSize: 13 }}>
-                    ⚠️ Admin có quyền truy cập toàn hệ thống, không cần giới hạn Zone.
-                  </Text>
-                </div>
-              )
-            }
           </Form.Item>
         </Form>
       </Modal>
