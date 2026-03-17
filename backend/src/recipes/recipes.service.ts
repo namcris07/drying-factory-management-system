@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateRecipeDto } from './dto/create-recipe.dto';
 
@@ -42,10 +43,22 @@ export class RecipesService {
 
   async update(id: number, dto: Partial<CreateRecipeDto>) {
     await this.findOne(id);
-    const { ...recipeData } = dto;
+    const { steps, ...recipeData } = dto;
+    const data: Prisma.RecipeUncheckedUpdateInput = {};
+
+    if (recipeData.recipeName !== undefined)
+      data.recipeName = recipeData.recipeName;
+    if (recipeData.recipeFruits !== undefined)
+      data.recipeFruits = recipeData.recipeFruits;
+    if (recipeData.timeDurationEst !== undefined)
+      data.timeDurationEst = recipeData.timeDurationEst;
+    if (recipeData.userID !== undefined) data.userID = recipeData.userID;
+
+    void steps;
+
     return this.prisma.recipe.update({
       where: { recipeID: id },
-      data: recipeData,
+      data,
       include: { steps: { orderBy: { stepNo: 'asc' } } },
     });
   }
