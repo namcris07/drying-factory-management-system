@@ -21,6 +21,20 @@ import { UsersController } from './users/users.controller';
 import { ZonesController } from './zones/zones.controller';
 import { MqttController } from './mqtt/mqtt.controller';
 
+jest.mock('@prisma/client', () => {
+  class PrismaClient {
+    $connect = jest.fn();
+    $disconnect = jest.fn();
+  }
+
+  return {
+    PrismaClient,
+    Prisma: {
+      JsonNull: null,
+    },
+  };
+});
+
 jest.mock('bcryptjs', () => ({
   compare: jest.fn(),
   hash: jest.fn(),
