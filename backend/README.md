@@ -1,98 +1,186 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Backend - DryTech API (NestJS + Prisma)
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Backend cung cấp REST API cho frontend và xử lý dữ liệu cảm biến từ MQTT.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+Stack chính:
+- NestJS 11
+- Prisma + PostgreSQL (`@prisma/adapter-pg`)
+- MQTT microservice qua `@nestjs/microservices`
 
-## Description
-
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
-
-## Project setup
+## 1. Chạy dự án
 
 ```bash
-$ npm install
+cd backend
+npm install
 ```
 
-## Compile and run the project
+### Dev mode
+```bash
+npm run start:dev
+```
+
+API base mặc định:
+- `http://localhost:3000/api`
+
+Lý do có `/api`: trong `main.ts` có `app.setGlobalPrefix('api')`.
+
+## 2. Scripts (theo package.json)
 
 ```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+npm run prisma:generate  # prisma generate
+npm run build            # nest build
+npm run start            # nest start
+npm run start:dev        # nest start --watch
+npm run start:debug      # nest start --debug --watch
+npm run start:prod       # node dist/main
+npm run lint             # eslint --fix
+npm run test             # jest --runInBand
+npm run test:watch       # jest --watch
+npm run test:cov         # jest --coverage --runInBand
+npm run test:e2e         # jest --config ./test/jest-e2e.json
 ```
 
-## Run tests
+## 3. ENV config
 
+Tạo `backend/.env` từ `backend/.env.example`:
+
+```env
+PORT=3000
+DATABASE_URL=postgresql://postgres:yourpassword@localhost:5432/dadn_db
+
+ADAFRUIT_IO_USERNAME=your_adafruit_username
+ADAFRUIT_IO_KEY=your_adafruit_aio_key
+
+# Khuyến nghị thêm (được code hỗ trợ fallback)
+FRONTEND_URL=http://localhost:3001
+```
+
+Ý nghĩa:
+- `PORT`: cổng HTTP API.
+- `DATABASE_URL`: chuỗi kết nối Postgres dùng bởi Prisma adapter.
+- `FRONTEND_URL`: origin CORS cho frontend.
+- `ADAFRUIT_IO_USERNAME` + `ADAFRUIT_IO_KEY`: bật MQTT listener.
+
+Lưu ý:
+- Nếu 2 biến Adafruit để placeholder thì backend sẽ log cảnh báo và không start microservice MQTT.
+
+## 4. Database setup (Prisma)
+
+### Prisma schema
+- File: `prisma/schema.prisma`
+- Provider: PostgreSQL.
+- Model chính: `User`, `Zone`, `Device`, `Recipe`, `RecipeStep`, `Batch`, `SensorDataLog`, `Alert`, `SystemConfig`, ...
+
+### Migrate + Generate + Seed
 ```bash
-# unit tests
-$ npm run test
+cd backend
 
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+npm run prisma:generate
+npx prisma migrate dev
+npx prisma db seed
 ```
 
-## Deployment
+Thông tin seed:
+- Seed script: `prisma/seed.ts`
+- Có sẵn users/zones/devices/recipes/batches/alerts/system-config.
+- Demo account:
+  - `admin@drytech.io / admin123`
+  - `manager@drytech.io / 123456`
+  - `op_a@drytech.io / op123`
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+## 5. Cấu trúc API (theo controller)
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+Do global prefix là `/api`, endpoint đầy đủ bắt đầu bằng `/api/...`.
 
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+### Health/App
+- `GET /api` -> `AppController.getHello()`
+
+### Auth
+- `POST /api/auth/login`
+
+### Users
+- `GET /api/users`
+- `GET /api/users/:id`
+- `POST /api/users`
+- `PATCH /api/users/:id`
+- `DELETE /api/users/:id`
+
+### Zones
+- `GET /api/zones`
+- `GET /api/zones/:id`
+- `POST /api/zones`
+- `PATCH /api/zones/:id`
+- `DELETE /api/zones/:id`
+
+### Devices
+- `GET /api/devices`
+- `GET /api/devices/:id`
+- `POST /api/devices`
+- `PATCH /api/devices/:id`
+- `DELETE /api/devices/:id`
+
+### Recipes
+- `GET /api/recipes`
+- `GET /api/recipes/:id`
+- `POST /api/recipes`
+- `PATCH /api/recipes/:id`
+- `DELETE /api/recipes/:id`
+
+### Batches
+- `GET /api/batches`
+- `GET /api/batches/:id`
+- `POST /api/batches`
+- `PATCH /api/batches/:id`
+- `DELETE /api/batches/:id`
+
+### Alerts
+- `GET /api/alerts?status=`
+- `GET /api/alerts/:id`
+- `POST /api/alerts`
+- `PATCH /api/alerts/:id/acknowledge`
+- `PATCH /api/alerts/:id/resolve`
+
+### Sensor data
+- `GET /api/sensor-data?deviceId=&limit=`
+
+### System config
+- `GET /api/system-config`
+- `PATCH /api/system-config`
+
+## 6. Luồng MQTT -> DB
+
+Khi MQTT bật:
+- Backend subscribe:
+  - `+/feeds/temperature`
+  - `+/feeds/humidity`
+- `MqttController` parse payload và topic.
+- Dữ liệu được ghi vào `SensorDataLog` qua `SensorService.processAndStoreData()`.
+
+## 7. Cấu trúc thư mục chính
+
+```text
+backend/
+|-- src/
+|   |-- auth/ users/ zones/ devices/
+|   |-- recipes/ batches/ alerts/
+|   |-- sensor-data/ system-config/
+|   |-- mqtt/ sensor/ prisma/
+|   `-- main.ts
+|-- prisma/
+|   |-- schema.prisma
+|   |-- migrations/
+|   `-- seed.ts
+|-- .env.example
+|-- Dockerfile
+`-- package.json
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+## 8. TEAM RULE trước khi tạo PR
 
-## Resources
+Bắt buộc pass đầy đủ:
+- `npm run build` ✅
+- `npm run test` ✅
+- `npm run lint` ✅
+- `npm run test:cov` ✅
 
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+Nếu chưa pass, KHÔNG được tạo PR.
