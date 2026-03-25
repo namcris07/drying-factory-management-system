@@ -5,7 +5,7 @@ Backend cung cấp REST API cho frontend và xử lý dữ liệu cảm biến t
 Stack chính:
 - NestJS 11
 - Prisma + PostgreSQL (`@prisma/adapter-pg`)
-- MQTT microservice qua `@nestjs/microservices`
+- MQTT client trực tiếp qua thư viện `mqtt`
 
 ## 1. Chạy dự án
 
@@ -50,6 +50,8 @@ DATABASE_URL=postgresql://postgres:yourpassword@localhost:5432/dadn_db
 
 ADAFRUIT_IO_USERNAME=your_adafruit_username
 ADAFRUIT_IO_KEY=your_adafruit_aio_key
+ADAFRUIT_IO_BROKER_URL=mqtt://io.adafruit.com:1883
+ADAFRUIT_IO_SUBSCRIBE_FEEDS=temperature,humidity,light,fan_state,fan_level,relay_state,led_state,lcd_text,device_status
 
 # Khuyến nghị thêm (được code hỗ trợ fallback)
 FRONTEND_URL=http://localhost:3001
@@ -59,10 +61,12 @@ FRONTEND_URL=http://localhost:3001
 - `PORT`: cổng HTTP API.
 - `DATABASE_URL`: chuỗi kết nối Postgres dùng bởi Prisma adapter.
 - `FRONTEND_URL`: origin CORS cho frontend.
-- `ADAFRUIT_IO_USERNAME` + `ADAFRUIT_IO_KEY`: bật MQTT listener.
+- `ADAFRUIT_IO_USERNAME` + `ADAFRUIT_IO_KEY`: tài khoản Adafruit IO để kết nối MQTT.
+- `ADAFRUIT_IO_BROKER_URL`: broker MQTT (mặc định Adafruit là `mqtt://io.adafruit.com:1883`).
+- `ADAFRUIT_IO_SUBSCRIBE_FEEDS`: các feed backend sẽ tự subscribe khi start.
 
 Lưu ý:
-- Nếu 2 biến Adafruit để placeholder thì backend sẽ log cảnh báo và không start microservice MQTT.
+- Nếu 2 biến Adafruit để placeholder thì backend sẽ log cảnh báo và không kết nối MQTT.
 
 ## 4. Database setup (Prisma)
 
@@ -83,7 +87,7 @@ npx prisma db seed
 Thông tin seed:
 - Seed script: `prisma/seed.ts`
 - Có sẵn users/zones/devices/recipes/batches/alerts/system-config.
-- Demo account:
+- Seed account:
   - `admin@drytech.io / admin123`
   - `manager@drytech.io / 123456`
   - `op_a@drytech.io / op123`
@@ -143,6 +147,13 @@ Do global prefix là `/api`, endpoint đầy đủ bắt đầu bằng `/api/...
 ### Sensor data
 - `GET /api/sensor-data?deviceId=&limit=`
 
+### MQTT control/test (quan trọng cho demo IoT)
+- `GET /api/mqtt/status` -> kiểm tra trạng thái kết nối broker + feed đã subscribe.
+- `GET /api/mqtt/state` -> đọc trạng thái feed gần nhất (dùng để đồng bộ UI nhanh).
+- `POST /api/mqtt/subscribe` -> đổi danh sách feed lắng nghe runtime.
+- `POST /api/mqtt/command` -> publish lệnh điều khiển thiết bị (fan/relay/led/lcd...).
+- `POST /api/mqtt/simulate/incoming` -> giả lập dữ liệu từ thiết bị/cloud gửi về.
+
 ### System config
 - `GET /api/system-config`
 - `PATCH /api/system-config`
@@ -150,11 +161,26 @@ Do global prefix là `/api`, endpoint đầy đủ bắt đầu bằng `/api/...
 ## 6. Luồng MQTT -> DB
 
 Khi MQTT bật:
-- Backend subscribe:
-  - `+/feeds/temperature`
-  - `+/feeds/humidity`
-- `MqttController` parse payload và topic.
-- Dữ liệu được ghi vào `SensorDataLog` qua `SensorService.processAndStoreData()`.
+- `MqttService` kết nối trực tiếp tới Adafruit IO bằng `ADAFRUIT_IO_USERNAME` + `ADAFRUIT_IO_KEY`.
+- Service tự subscribe các feed trong `ADAFRUIT_IO_SUBSCRIBE_FEEDS`.
+- Mỗi incoming message được parse và ghi vào bảng `SensorDataLog` (JSON `measurements`).
+- Mỗi command publish từ server cũng được lưu log để audit/debug.
+- State gần nhất từng feed được lưu memory + `SystemConfig` (`mqtt:last:<feed>`) để app đọc lại nhanh.
+
+Ví dụ test nhanh (PowerShell):
+
+```powershell
+# (a) Bat quat level 2 tu server -> app doc /api/mqtt/state se thay doi ngay
+Invoke-RestMethod -Method POST -Uri http://localhost:3000/api/mqtt/command -ContentType "application/json" -Body '{"feed":"fan_cmd","value":"ON"}'
+Invoke-RestMethod -Method POST -Uri http://localhost:3000/api/mqtt/command -ContentType "application/json" -Body '{"feed":"fan_level","value":2}'
+
+# (b) Gia lap nhiet do tang/giam tu thiet bi -> app va sensor-data thay doi
+Invoke-RestMethod -Method POST -Uri http://localhost:3000/api/mqtt/simulate/incoming -ContentType "application/json" -Body '{"feed":"temperature","value":35.2}'
+Invoke-RestMethod -Method POST -Uri http://localhost:3000/api/mqtt/simulate/incoming -ContentType "application/json" -Body '{"feed":"temperature","value":22.1}'
+
+# Xem state moi nhat
+Invoke-RestMethod -Method GET -Uri http://localhost:3000/api/mqtt/state
+```
 
 ## 7. Cấu trúc thư mục chính
 

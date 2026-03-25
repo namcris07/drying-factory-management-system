@@ -1,0 +1,847 @@
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useParams, useRouter } from 'next/navigation';
+import {
+  Alert,
+  App,
+  Badge,
+  Button,
+  Card,
+  Col,
+  Collapse,
+  Divider,
+  Input,
+  Progress,
+  Row,
+  Select,
+  Slider,
+  Space,
+  Switch,
+  Tag,
+  Typography,
+} from 'antd';
+import {
+  ArrowLeftOutlined,
+  CheckCircleOutlined,
+  ClockCircleOutlined,
+  CloudServerOutlined,
+  ExclamationCircleOutlined,
+  BookOutlined,
+  PauseCircleOutlined,
+  PlayCircleOutlined,
+  ReloadOutlined,
+  SendOutlined,
+  StopOutlined,
+  ThunderboltOutlined,
+  ToolOutlined,
+  WarningOutlined,
+} from '@ant-design/icons';
+import {
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip as ReTooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
+import { useOperatorContext } from '@/features/operator/model/operator-context';
+import { AIO_THRESHOLDS } from '@/features/operator/adafruit/config/adafruit-config';
+import { getMachineFeeds } from '@/features/operator/adafruit/config/adafruit-config';
+import { useAdafruitIO } from '@/features/operator/adafruit/model/use-adafruit-io';
+import { mqttApi } from '@/shared/lib/api';
+
+const { Title, Text, Paragraph } = Typography;
+const { TextArea } = Input;
+const DOOR_OPEN_LUX = AIO_THRESHOLDS.lightDoor;
+const HEAT_LOSS_DELAY_MS = 20_000;
+
+type StatusKey = 'Running' | 'Idle' | 'Error' | 'Maintenance';
+
+const statusCfg: Record<StatusKey, { text: string; tagColor: 'success' | 'default' | 'error' | 'warning' }> = {
+  Running: { text: 'Dang chay', tagColor: 'success' },
+  Idle: { text: 'Cho', tagColor: 'default' },
+  Error: { text: 'Loi', tagColor: 'error' },
+  Maintenance: { text: 'Bao tri', tagColor: 'warning' },
+};
+
+export default function OperatorMachineDetailPage() {
+  const router = useRouter();
+  const params = useParams<{ id: string }>();
+  const machineId = decodeURIComponent(params.id);
+  const { message } = App.useApp();
+  const [lcdInput, setLcdInput] = useState('');
+  const [sendingLcd, setSendingLcd] = useState(false);
+  const [nowSnapshot, setNowSnapshot] = useState<number>(() => Date.now());
+  const [selectedRecipeId, setSelectedRecipeId] = useState<number | null>(null);
+  const [heatLossDetected, setHeatLossDetected] = useState(false);
+  const doorOpenSinceRef = useRef<number | null>(null);
+  const heatLossNotifiedRef = useRef(false);
+
+  const { machines, zone, recipes, setMachines } = useOperatorContext();
+
+  const machine = useMemo(
+    () => machines.find((item) => item.id === machineId),
+    [machines, machineId],
+  );
+
+  const feeds = useMemo(() => getMachineFeeds(machineId), [machineId]);
+
+  const {
+    sensor,
+    output,
+    history,
+    loading,
+    connected,
+    errorMsg,
+    lastUpdated,
+    setFan,
+    setFanLevel,
+    setRelay,
+    sendLcd,
+    refresh,
+  } = useAdafruitIO(feeds);
+
+  const elapsed = (() => {
+    if (!machine?.startTime) return '--';
+    const [h, m] = machine.startTime.split(':').map(Number);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) return '--';
+
+    const startedAt = new Date();
+    startedAt.setHours(h, m, 0, 0);
+    const diffMs = nowSnapshot - startedAt.getTime();
+    if (diffMs < 0) return '--';
+
+    const dh = Math.floor(diffMs / 3600000);
+    const dm = Math.floor((diffMs % 3600000) / 60000);
+    return `${dh}h ${dm}m`;
+  })();
+
+  const elapsedMsSnapshot = (() => {
+    if (!machine?.startTime) return 0;
+    const [h, m] = machine.startTime.split(':').map(Number);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) return 0;
+
+    const startedAt = new Date();
+    startedAt.setHours(h, m, 0, 0);
+    return Math.max(0, nowSnapshot - startedAt.getTime());
+  })();
+
+  const effectiveSelectedRecipeId = selectedRecipeId ?? machine?.recipeId ?? null;
+
+  const selectedRecipe = useMemo(
+    () => recipes.find((recipe) => recipe.id === effectiveSelectedRecipeId),
+    [effectiveSelectedRecipeId, recipes],
+  );
+
+  const activeRecipe = useMemo(
+    () => recipes.find((recipe) => recipe.id === machine?.recipeId),
+    [recipes, machine?.recipeId],
+  );
+
+  const calculatedProgress = useMemo(() => {
+    if (!machine?.startTime || !activeRecipe?.duration) {
+      return typeof machine?.progress === 'number' ? machine.progress : undefined;
+    }
+
+    const [h, m] = machine.startTime.split(':').map(Number);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) {
+      return typeof machine.progress === 'number' ? machine.progress : undefined;
+    }
+
+    const elapsedMs = elapsedMsSnapshot;
+    if (elapsedMs <= 0) return 0;
+
+    const durationMs = activeRecipe.duration * 60 * 60 * 1000;
+    if (durationMs <= 0) return typeof machine.progress === 'number' ? machine.progress : undefined;
+
+    return Math.max(0, Math.min(100, Math.round((elapsedMs / durationMs) * 100)));
+  }, [activeRecipe?.duration, elapsedMsSnapshot, machine?.progress, machine?.startTime]);
+
+  const doorOpenByLux = sensor.light > DOOR_OPEN_LUX;
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setNowSnapshot(Date.now());
+    }, 30000);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (!machine || machine.status !== 'Running') {
+        doorOpenSinceRef.current = null;
+        heatLossNotifiedRef.current = false;
+        setHeatLossDetected((prev) => (prev ? false : prev));
+        return;
+      }
+
+      if (!doorOpenByLux) {
+        doorOpenSinceRef.current = null;
+        heatLossNotifiedRef.current = false;
+        setHeatLossDetected((prev) => (prev ? false : prev));
+        return;
+      }
+
+      if (!doorOpenSinceRef.current) {
+        doorOpenSinceRef.current = Date.now();
+        return;
+      }
+
+      if (!heatLossNotifiedRef.current && Date.now() - doorOpenSinceRef.current >= HEAT_LOSS_DELAY_MS) {
+        heatLossNotifiedRef.current = true;
+        setHeatLossDetected(true);
+        message.warning(`Phat hien that thoat nhiet: lux > ${DOOR_OPEN_LUX} trong hon ${HEAT_LOSS_DELAY_MS / 1000}s.`);
+      }
+    }, 1000);
+
+    return () => clearInterval(id);
+  }, [doorOpenByLux, machine, message]);
+
+  const simulateSensor = async (feed: string, value: number) => {
+    try {
+      await mqttApi.simulateIncoming(feed, value);
+      message.success(`Da gia lap ${feed} = ${value}`);
+      refresh();
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Gia lap that bai');
+    }
+  };
+
+  if (!machine) {
+    return (
+      <div style={{ textAlign: 'center', padding: '80px 0' }}>
+        <Text type="secondary" style={{ fontSize: 16 }}>
+          Khong tim thay thiet bi.
+        </Text>
+        <br />
+        <Button
+          type="link"
+          icon={<ReloadOutlined />}
+          onClick={() => router.push('/operator')}
+          style={{ marginTop: 8 }}
+        >
+          Quay lai danh sach
+        </Button>
+      </div>
+    );
+  }
+
+  const cfg = statusCfg[machine.status];
+  const isRunning = machine.status === 'Running';
+  const isIdle = machine.status === 'Idle';
+  const isError = machine.status === 'Error';
+  const isMaintenance = machine.status === 'Maintenance';
+  const doorOpen = doorOpenByLux;
+
+  const handleQuickStartBatch = async () => {
+    if (!selectedRecipe) {
+      message.warning('Vui long chon cong thuc say truoc khi khoi dong.');
+      return;
+    }
+    if (isMaintenance) {
+      message.warning('Thiet bi dang bao tri, khong the khoi dong me say.');
+      return;
+    }
+
+    try {
+      await Promise.all([setFan(true), setRelay(true)]);
+      await setFanLevel(Math.max(1, output.fanLevel || 3));
+
+      const now = new Date();
+      const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+
+      setMachines((prev) =>
+        prev.map((item) =>
+          item.id === machineId
+            ? {
+              ...item,
+              status: 'Running',
+              recipe: selectedRecipe.name,
+              recipeId: selectedRecipe.id,
+              progress: 0,
+              startTime: timeStr,
+            }
+            : item,
+        ),
+      );
+
+      message.success(`Da khoi dong nhanh me say: ${selectedRecipe.name}.`);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Khoi dong me say that bai.');
+    }
+  };
+
+  const handleStopBatch = async () => {
+    try {
+      await Promise.all([setFan(false), setRelay(false)]);
+      setMachines((prev) =>
+        prev.map((item) =>
+          item.id === machineId
+            ? {
+              ...item,
+              status: 'Idle',
+              progress: undefined,
+              startTime: undefined,
+              recipe: undefined,
+              recipeId: undefined,
+            }
+            : item,
+        ),
+      );
+      message.info('Da dung me say hien tai.');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Dung me say that bai.');
+    }
+  };
+
+  const handleFanToggle = async (on: boolean) => {
+    await setFan(on);
+    message.info(`Quat -> ${on ? 'BAT' : 'TAT'}`);
+  };
+
+  const handleRelayToggle = async (on: boolean) => {
+    await setRelay(on);
+    message.info(`Relay -> ${on ? 'DONG' : 'NGAT'}`);
+  };
+
+  const handleSendLcd = async () => {
+    if (!lcdInput.trim()) {
+      message.warning('Vui long nhap noi dung LCD.');
+      return;
+    }
+    setSendingLcd(true);
+    await sendLcd(lcdInput.trim().slice(0, 32));
+    message.success(`Da gui len LCD: ${lcdInput.trim().slice(0, 32)}`);
+    setSendingLcd(false);
+    setLcdInput('');
+  };
+
+  return (
+    <div>
+      <div style={{ marginBottom: 20 }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 12,
+          }}
+        >
+          <div>
+            <Space style={{ marginBottom: 10 }}>
+              <Button icon={<ArrowLeftOutlined />} onClick={() => router.push('/operator')}>
+                Ve dashboard
+              </Button>
+              <Button icon={<ReloadOutlined />} onClick={refresh} loading={loading}>
+                Lam moi
+              </Button>
+            </Space>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+              <Title level={2} style={{ margin: 0 }}>
+                <CloudServerOutlined style={{ marginRight: 8, color: '#1677ff' }} />
+                {machine.id} · {machine.name}
+              </Title>
+              <Tag
+                color={cfg.tagColor}
+                style={{ borderRadius: 20, fontSize: 14, padding: '4px 14px', border: 'none' }}
+                icon={
+                  isRunning ? <ThunderboltOutlined />
+                    : isIdle ? <PauseCircleOutlined />
+                      : isError ? <WarningOutlined /> : <ToolOutlined />
+                }
+              >
+                {cfg.text}
+              </Tag>
+              <Tag color={connected ? 'success' : 'error'}>
+                {connected ? 'MQTT Connected' : 'MQTT Disconnected'}
+              </Tag>
+            </div>
+            <Space style={{ marginTop: 6 }} size={12}>
+              <Text type="secondary" style={{ fontSize: 14 }}>
+                Zone: <Text strong>{zone}</Text>
+              </Text>
+              {machine.startTime && (
+                <Text type="secondary" style={{ fontSize: 13 }}>
+                  <ClockCircleOutlined style={{ marginRight: 4 }} />
+                  Bat dau {machine.startTime} · Da chay {elapsed}
+                </Text>
+              )}
+              {activeRecipe && (
+                <Text type="secondary" style={{ fontSize: 13 }}>
+                  <BookOutlined style={{ marginRight: 4, color: '#1677ff' }} />
+                  Me say: <Text strong style={{ color: '#1677ff' }}>{activeRecipe.name}</Text>
+                </Text>
+              )}
+              {lastUpdated && (
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  Cap nhat: {lastUpdated.toLocaleTimeString('vi', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                </Text>
+              )}
+            </Space>
+          </div>
+        </div>
+      </div>
+
+      {errorMsg && (
+        <Alert
+          style={{ marginBottom: 16, borderRadius: 12 }}
+          type="warning"
+          showIcon
+          message="Canh bao ket noi"
+          description={errorMsg}
+        />
+      )}
+
+      {isError && (machine.errorCode || machine.errorMsg) && (
+        <Alert
+          style={{ marginBottom: 20, borderRadius: 12 }}
+          type="error"
+          showIcon
+          message={
+            <div>
+              <Text strong style={{ color: '#ff4d4f', marginRight: 8 }}>
+                {machine.errorCode || 'ERROR'}
+              </Text>
+              <Text>{machine.errorMsg || 'Thiet bi gap su co can kiem tra.'}</Text>
+            </div>
+          }
+        />
+      )}
+
+      <Row gutter={[20, 20]}>
+        <Col xs={24} lg={15} xl={16}>
+          <Card
+            style={{ borderRadius: 14, marginBottom: 18 }}
+            title={
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontWeight: 600 }}>Dien bien nhiet do & do am - 30 mau gan nhat</span>
+                {isRunning && (
+                  <Badge status="processing" text={<Text style={{ fontSize: 12 }}>Dang cap nhat</Text>} />
+                )}
+              </div>
+            }
+          >
+            {isRunning ? (
+              <ResponsiveContainer width="100%" height={260}>
+                <LineChart data={history} margin={{ top: 5, right: 24, left: -10, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="time" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
+                  <YAxis
+                    yAxisId="temp"
+                    domain={['auto', 'auto']}
+                    tick={{ fontSize: 11 }}
+                    tickFormatter={(v) => `${v}°`}
+                    width={38}
+                  />
+                  <YAxis
+                    yAxisId="hum"
+                    orientation="right"
+                    domain={['auto', 'auto']}
+                    tick={{ fontSize: 11 }}
+                    tickFormatter={(v) => `${v}%`}
+                    width={38}
+                  />
+                  <ReTooltip
+                    contentStyle={{ borderRadius: 10, border: '1px solid #f0f0f0', fontSize: 13 }}
+                    formatter={(val: number, name: string) => [
+                      name === 'temperature' ? `${val}°C` : `${val}%`,
+                      name === 'temperature' ? 'Nhiet do' : 'Do am',
+                    ]}
+                  />
+                  <Legend
+                    formatter={(n) => n === 'temperature' ? 'Nhiet do (°C)' : 'Do am (%)'}
+                    iconType="circle"
+                    iconSize={9}
+                  />
+                  <Line
+                    yAxisId="temp"
+                    type="monotone"
+                    dataKey="temperature"
+                    name="temperature"
+                    stroke="#ff7a00"
+                    strokeWidth={2.5}
+                    dot={false}
+                    activeDot={{ r: 5, fill: '#ff7a00' }}
+                  />
+                  <Line
+                    yAxisId="hum"
+                    type="monotone"
+                    dataKey="humidity"
+                    name="humidity"
+                    stroke="#1677ff"
+                    strokeWidth={2.5}
+                    dot={false}
+                    activeDot={{ r: 5, fill: '#1677ff' }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <div
+                style={{
+                  height: 260,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#bfbfbf',
+                  background: '#fafafa',
+                  borderRadius: 10,
+                }}
+              >
+                <PauseCircleOutlined style={{ fontSize: 48, marginBottom: 12 }} />
+                <Text type="secondary">Bieu do se hien thi khi may dang chay</Text>
+              </div>
+            )}
+          </Card>
+
+          <Row gutter={[14, 14]}>
+            {typeof calculatedProgress === 'number' && (
+              <Col span={24}>
+                <Card style={{ borderRadius: 12 }} styles={{ body: { padding: '16px 20px' } }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, alignItems: 'center' }}>
+                    <Text strong>Tien do me say</Text>
+                    <Text strong style={{ fontSize: 18, color: '#1677ff' }}>
+                      {Math.round(calculatedProgress)}%
+                    </Text>
+                  </div>
+                  <Progress
+                    percent={Math.round(calculatedProgress)}
+                    strokeColor={{ '0%': '#1677ff', '100%': '#52c41a' }}
+                    size={['100%', 14]}
+                    status={calculatedProgress === 100 ? 'success' : 'active'}
+                  />
+                </Card>
+              </Col>
+            )}
+
+            <Col xs={12}>
+              <Card
+                style={{
+                  borderRadius: 12,
+                  textAlign: 'center',
+                  border: doorOpen ? '2px solid #ffccc7' : '1px solid #f0f0f0',
+                  background: doorOpen ? '#fff2f0' : '#fff',
+                }}
+                styles={{ body: { padding: '20px 16px' } }}
+              >
+                <div style={{ fontSize: 42, marginBottom: 8, lineHeight: 1 }}>
+                  {doorOpen ? '🚪' : '🔒'}
+                </div>
+                <Text strong style={{ display: 'block', marginBottom: 6 }}>Cua buong say</Text>
+                <Tag
+                  color={doorOpen ? 'error' : 'success'}
+                  style={{ borderRadius: 20, padding: '3px 12px' }}
+                >
+                  {doorOpen ? 'Dang mo' : 'Da dong'}
+                </Tag>
+                {doorOpen && (
+                  <div style={{ marginTop: 6 }}>
+                    <Text type="danger" style={{ fontSize: 11 }}>Canh bao: mat nhiet!</Text>
+                  </div>
+                )}
+                <div style={{ marginTop: 6 }}>
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    Nguong mo cua: lux {'>'} {DOOR_OPEN_LUX}
+                  </Text>
+                </div>
+              </Card>
+            </Col>
+
+            <Col xs={12}>
+              <Card
+                style={{ borderRadius: 12, textAlign: 'center' }}
+                styles={{ body: { padding: '20px 16px' } }}
+              >
+                <div style={{ fontSize: 42, marginBottom: 8, lineHeight: 1 }}>⏱</div>
+                <Text strong style={{ display: 'block', marginBottom: 6 }}>Thoi gian chay</Text>
+                <Text style={{ fontSize: 20, fontWeight: 700, color: isRunning ? '#1677ff' : '#8c8c8c' }}>
+                  {isRunning ? elapsed : '--'}
+                </Text>
+              </Card>
+            </Col>
+          </Row>
+        </Col>
+
+        <Col xs={24} lg={9} xl={8}>
+          <Card
+            style={{ borderRadius: 14, position: 'sticky', top: 80 }}
+            title={<span style={{ fontWeight: 600 }}>Bang dieu khien</span>}
+          >
+            <Row gutter={10} style={{ marginBottom: 18 }}>
+              <Col span={12}>
+                <div
+                  style={{
+                    background: 'rgba(255,122,0,0.09)',
+                    borderRadius: 12,
+                    padding: '14px 8px',
+                    textAlign: 'center',
+                  }}
+                >
+                  <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Nhiet do</div>
+                  <div style={{ fontSize: 44, fontWeight: 900, color: '#ff7a00', lineHeight: 1 }}>
+                    {sensor.temperature > 0 ? sensor.temperature.toFixed(1) : '--'}
+                  </div>
+                  <div style={{ fontSize: 14, color: '#ff7a00', fontWeight: 600 }}>degC</div>
+                </div>
+              </Col>
+              <Col span={12}>
+                <div
+                  style={{
+                    background: 'rgba(22,119,255,0.09)',
+                    borderRadius: 12,
+                    padding: '14px 8px',
+                    textAlign: 'center',
+                  }}
+                >
+                  <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Do am</div>
+                  <div style={{ fontSize: 44, fontWeight: 900, color: '#1677ff', lineHeight: 1 }}>
+                    {sensor.humidity > 0 ? sensor.humidity.toFixed(1) : '--'}
+                  </div>
+                  <div style={{ fontSize: 14, color: '#1677ff', fontWeight: 600 }}>%</div>
+                </div>
+              </Col>
+            </Row>
+
+            <Divider style={{ margin: '0 0 16px' }} />
+
+            {(isIdle || isError) && (
+              <div style={{ marginBottom: 16 }}>
+                <Text strong style={{ display: 'block', marginBottom: 8, fontSize: 14 }}>
+                  <BookOutlined style={{ color: '#1677ff', marginRight: 6 }} />
+                  Chon cong thuc khoi dong nhanh
+                </Text>
+                <Select
+                  placeholder="Chon cong thuc say..."
+                  value={selectedRecipeId ?? undefined}
+                  onChange={(value) => setSelectedRecipeId(value)}
+                  style={{ width: '100%' }}
+                  size="large"
+                  options={recipes.map((recipe) => ({
+                    value: recipe.id,
+                    label: `${recipe.name} - ${recipe.temp}degC · ${recipe.duration}h`,
+                  }))}
+                />
+                {selectedRecipe && (
+                  <div
+                    style={{
+                      marginTop: 10,
+                      padding: '10px 14px',
+                      background: '#f6ffed',
+                      borderRadius: 10,
+                      border: '1px solid #b7eb8f',
+                    }}
+                  >
+                    <Text style={{ fontSize: 13, color: '#389e0d' }}>
+                      <CheckCircleOutlined style={{ marginRight: 6 }} />
+                      {selectedRecipe.name}
+                    </Text>
+                    <div style={{ display: 'flex', gap: 10, marginTop: 4, flexWrap: 'wrap' }}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>Nhiet do: {selectedRecipe.temp}degC</Text>
+                      <Text type="secondary" style={{ fontSize: 12 }}>Do am: {selectedRecipe.humidity}%</Text>
+                      <Text type="secondary" style={{ fontSize: 12 }}>Thoi luong: {selectedRecipe.duration}h</Text>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {isIdle && (
+              <Button
+                type="primary"
+                block
+                size="large"
+                icon={<PlayCircleOutlined />}
+                disabled={!selectedRecipeId}
+                onClick={() => void handleQuickStartBatch()}
+                style={{
+                  height: 54,
+                  borderRadius: 14,
+                  fontSize: 17,
+                  fontWeight: 800,
+                  background: selectedRecipeId ? '#52c41a' : undefined,
+                  borderColor: selectedRecipeId ? '#52c41a' : undefined,
+                  marginBottom: 14,
+                }}
+              >
+                KHOI DONG NHANH
+              </Button>
+            )}
+
+            {isRunning && (
+              <Button
+                danger
+                block
+                size="large"
+                icon={<StopOutlined />}
+                onClick={() => void handleStopBatch()}
+                style={{
+                  height: 54,
+                  borderRadius: 14,
+                  fontSize: 17,
+                  fontWeight: 800,
+                  marginBottom: 14,
+                }}
+              >
+                DUNG ME SAY
+              </Button>
+            )}
+
+            <div style={{ marginBottom: 16 }}>
+              <Text strong style={{ display: 'block', marginBottom: 8, fontSize: 14 }}>
+                Dieu khien thiet bi
+              </Text>
+              <Row gutter={[10, 10]}>
+                <Col span={12}>
+                  <Card size="small" style={{ borderRadius: 10 }} styles={{ body: { padding: 12 } }}>
+                    <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                      <Text strong>
+                        <ThunderboltOutlined /> Quat
+                      </Text>
+                      <Switch checked={output.fanOn} onChange={(checked) => void handleFanToggle(checked)} />
+                      <Text type="secondary">Level: {output.fanLevel}</Text>
+                    </Space>
+                  </Card>
+                </Col>
+                <Col span={12}>
+                  <Card size="small" style={{ borderRadius: 10 }} styles={{ body: { padding: 12 } }}>
+                    <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                      <Text strong>
+                        <PlayCircleOutlined /> Relay
+                      </Text>
+                      <Switch checked={output.relayOn} onChange={(checked) => void handleRelayToggle(checked)} />
+                      <Text type="secondary">Trang thai chay</Text>
+                    </Space>
+                  </Card>
+                </Col>
+                <Col span={24}>
+                  <Card size="small" style={{ borderRadius: 10 }} styles={{ body: { padding: 12 } }}>
+                    <Text strong style={{ display: 'block', marginBottom: 8 }}>Toc do quat</Text>
+                    <Slider
+                      min={0}
+                      max={5}
+                      step={1}
+                      value={output.fanLevel}
+                      onChange={(value) => void setFanLevel(value)}
+                    />
+                  </Card>
+                </Col>
+              </Row>
+            </div>
+
+            <div style={{ marginBottom: 10 }}>
+              <Text strong style={{ display: 'block', marginBottom: 8 }}>LCD Message</Text>
+              <TextArea
+                rows={3}
+                placeholder="Nhap toi da 32 ky tu..."
+                value={lcdInput}
+                onChange={(e) => setLcdInput(e.target.value)}
+                maxLength={64}
+                style={{ borderRadius: 8, marginBottom: 8 }}
+              />
+              <Button
+                block
+                type="primary"
+                icon={<SendOutlined />}
+                onClick={() => void handleSendLcd()}
+                loading={sendingLcd}
+                style={{ borderRadius: 10, height: 42, fontWeight: 600 }}
+              >
+                Gui LCD
+              </Button>
+              {output.lcdMessage && (
+                <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
+                  Noi dung hien tai: <Text code>{output.lcdMessage}</Text>
+                </Paragraph>
+              )}
+            </div>
+
+            <Collapse
+              size="small"
+              style={{ borderRadius: 10, marginTop: 12 }}
+              items={[
+                {
+                  key: 'test-sensor',
+                  label: 'Gia lap sensor de test nhanh',
+                  children: (
+                    <Space wrap>
+                      <Button onClick={() => void simulateSensor(feeds.temperature, 35.5)}>
+                        Tang nhiet do
+                      </Button>
+                      <Button onClick={() => void simulateSensor(feeds.temperature, 22.4)}>
+                        Giam nhiet do
+                      </Button>
+                      <Button onClick={() => void simulateSensor(feeds.humidity, 75)}>
+                        Do am cao
+                      </Button>
+                      <Button onClick={() => void simulateSensor(feeds.light, 900)}>
+                        Anh sang cao
+                      </Button>
+                    </Space>
+                  ),
+                },
+              ]}
+            />
+
+            {isMaintenance && (
+              <div style={{ textAlign: 'center', padding: '16px 0 6px' }}>
+                <Tag color="warning" icon={<ToolOutlined />}>Thiet bi dang bao tri</Tag>
+              </div>
+            )}
+
+            <Divider style={{ margin: '12px 0 8px' }} />
+            <div style={{ textAlign: 'center' }}>
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                Thong so cap nhat luc{' '}
+                {new Date().toLocaleTimeString('vi', { hour: '2-digit', minute: '2-digit' })}
+              </Text>
+            </div>
+          </Card>
+        </Col>
+      </Row>
+
+      {isError && (
+        <Alert
+          style={{ marginTop: 16, borderRadius: 10 }}
+          type="error"
+          showIcon
+          message="Canh bao trang thai may"
+          description="He thong dang danh dau may trong trang thai Loi. Kiem tra canh bao va xu ly truoc khi van hanh tiep."
+          action={
+            <Button size="small" danger icon={<ExclamationCircleOutlined />}>
+              Da tiep nhan
+            </Button>
+          }
+        />
+      )}
+
+      {heatLossDetected && isRunning && (
+        <Alert
+          style={{ marginTop: 16, borderRadius: 10 }}
+          type="error"
+          showIcon
+          message="Canh bao that thoat nhiet"
+          description={`Lux hien tai (${sensor.light}) vuot nguong mo cua (${DOOR_OPEN_LUX}) qua ${HEAT_LOSS_DELAY_MS / 1000} giay khi may dang chay.`}
+        />
+      )}
+
+      {isIdle && (
+        <Alert
+          style={{ marginTop: 16, borderRadius: 10 }}
+          type="info"
+          showIcon
+          message="May dang cho"
+          description="Bat Quat/Relay tu bang dieu khien ben phai de dua may vao trang thai chay theo logic hien tai."
+          action={
+            <Button size="small" icon={<CheckCircleOutlined />}>
+              Da ro
+            </Button>
+          }
+        />
+      )}
+    </div>
+  );
+}

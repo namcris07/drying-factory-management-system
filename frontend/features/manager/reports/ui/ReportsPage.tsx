@@ -40,8 +40,6 @@ export default function ReportsPage() {
             <Select defaultValue="all" style={{ width: 160 }}>
               <Select.Option value="all">Tất cả khu vực</Select.Option>
               <Select.Option value="zoneA">Zone A</Select.Option>
-              <Select.Option value="zoneB">Zone B</Select.Option>
-              <Select.Option value="zoneC">Zone C</Select.Option>
             </Select>
           </div>
         </Space>

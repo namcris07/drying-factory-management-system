@@ -5,7 +5,9 @@
  * Context để chia sẻ state giữa OperatorLayout và các operator pages
  */
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { Machine, Recipe, initialMachines, recipes } from '@/features/operator/model/machine-data';
+import { Machine, Recipe } from '@/features/operator/model/machine-data';
+import { getMachineFeeds } from '@/features/operator/adafruit/config/adafruit-config';
+import { devicesApi, mqttApi, recipesApi } from '@/shared/lib/api';
 
 export type OperatorContextType = {
   machines:     Machine[];
@@ -32,29 +34,128 @@ interface OperatorProviderProps {
 }
 
 export function OperatorProvider({ children, zone, operatorName }: OperatorProviderProps) {
-  const [machines, setMachines] = useState<Machine[]>(initialMachines);
+  const [machines, setMachines] = useState<Machine[]>([]);
+  const [recipes, setRecipes] = useState<Recipe[]>([]);
 
-  // Real-time simulation (3s)
   useEffect(() => {
-    const interval = setInterval(() => {
-      setMachines(prev =>
-        prev.map(m => {
-          if (m.status !== 'Running') return m;
-          const newTemp     = Math.max(40, Math.min(95, (m.temp     || 65) + (Math.random() - 0.5) * 1.8));
-          const newHum      = Math.max(5,  Math.min(80, (m.humidity || 18) + (Math.random() - 0.5) * 1.2));
-          const newProgress = Math.min(100, (m.progress || 0) + 0.06);
-          const doorToggle  = Math.random() < 0.04;
-          return {
-            ...m,
-            temp:     Math.round(newTemp * 10) / 10,
-            humidity: Math.round(newHum  * 10) / 10,
-            progress: Math.round(newProgress * 10) / 10,
-            doorOpen: doorToggle ? !m.doorOpen : m.doorOpen,
-          };
-        }),
+    let mounted = true;
+
+    const toMachineId = (name: string | null, topic: string | null, id: number) => {
+      const topicMatch = topic?.match(/\/(m-[a-z0-9]+)\//i)?.[1]?.toUpperCase();
+      if (topicMatch) return topicMatch;
+
+      const nameMatch = name?.match(/([A-Z]\d+)/i)?.[1]?.toUpperCase();
+      if (nameMatch) return `M-${nameMatch}`;
+
+      return `M-A${id}`;
+    };
+
+    const loadBaseData = async () => {
+      try {
+        const [deviceRows, recipeRows] = await Promise.all([
+          devicesApi.getAll(),
+          recipesApi.getAll(),
+        ]);
+
+        if (!mounted) return;
+
+        const mappedMachines: Machine[] = deviceRows.map((row) => ({
+          id: toMachineId(row.deviceName, row.mqttTopicSensor, row.deviceID),
+          name: row.deviceName || `May say ${row.deviceID}`,
+          zone: row.zone?.zoneName || zone,
+          status: row.deviceStatus === 'Active' ? 'Idle' : 'Maintenance',
+          temp: 0,
+          humidity: 0,
+        }));
+
+        const mappedRecipes: Recipe[] = recipeRows.map((row) => ({
+          id: row.recipeID,
+          name: row.recipeName || `Cong thuc ${row.recipeID}`,
+          fruit: row.recipeFruits || '-',
+          temp: Number(row.steps?.[0]?.temperatureGoal ?? 0),
+          humidity: Number(row.steps?.[0]?.humidityGoal ?? 0),
+          duration: Math.max(1, Math.round((row.timeDurationEst ?? 60) / 60)),
+        }));
+
+        setMachines(mappedMachines);
+        setRecipes(mappedRecipes);
+      } catch {
+        if (!mounted) return;
+        setMachines([]);
+        setRecipes([]);
+      }
+    };
+
+    void loadBaseData();
+
+    return () => {
+      mounted = false;
+    };
+  }, [zone]);
+
+  // Đồng bộ realtime từ backend MQTT state mỗi 3 giây
+  useEffect(() => {
+    let mounted = true;
+
+    const parseNumber = (value: unknown) => {
+      const num = Number(value);
+      return Number.isFinite(num) ? Math.round(num * 10) / 10 : undefined;
+    };
+
+    const parseOnOff = (value: unknown) => {
+      return (
+        value === 1 ||
+        value === '1' ||
+        value === true ||
+        String(value).toUpperCase() === 'ON'
       );
+    };
+
+    const syncFromServer = async () => {
+      try {
+        const state = await mqttApi.getState();
+        const byFeed = new Map(state.map((item) => [item.feed, item.value]));
+
+        if (!mounted) return;
+
+        setMachines((prev) =>
+          prev.map((machine) => {
+            const feeds = getMachineFeeds(machine.id);
+            const temp = parseNumber(byFeed.get(feeds.temperature));
+            const humidity = parseNumber(byFeed.get(feeds.humidity));
+            const fanOn = parseOnOff(byFeed.get(feeds.fan));
+
+            const nextStatus = fanOn
+              ? machine.status === 'Error' || machine.status === 'Maintenance'
+                ? machine.status
+                : 'Running'
+              : machine.status === 'Error' || machine.status === 'Maintenance'
+                ? machine.status
+                : 'Idle';
+
+            return {
+              ...machine,
+              temp: temp ?? machine.temp,
+              humidity: humidity ?? machine.humidity,
+              status: nextStatus,
+            };
+          }),
+        );
+      } catch {
+        // Giữ state cũ nếu backend/MQTT tạm thời gián đoạn
+      }
+    };
+
+    void syncFromServer();
+
+    const interval = setInterval(() => {
+      void syncFromServer();
     }, 3000);
-    return () => clearInterval(interval);
+
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
   }, []);
 
   const value: OperatorContextType = {

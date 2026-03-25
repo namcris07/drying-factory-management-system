@@ -7,6 +7,7 @@
   "license": "UNLICENSED",
   "scripts": {
     "prisma:generate": "prisma generate",
+    "seed": "ts-node prisma/seed.ts",
     "prebuild": "npm run prisma:generate",
     "build": "nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
@@ -87,6 +88,7 @@
       "!**/dto/*.ts",
       "!**/*.entity.ts",
       "!prisma/prisma.service.ts",
+      "!mqtt/mqtt.service.ts",
       "!main.ts",
       "!app.module.ts"
     ],

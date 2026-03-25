@@ -31,6 +31,7 @@ export interface SensorData {
 /** Trạng thái thiết bị đầu ra */
 export interface DeviceOutput {
   fanOn:      boolean;
+  fanLevel:   number;
   relayOn:    boolean;
   lcdMessage: string;
 }
@@ -84,65 +85,4 @@ export async function publishFeedValue(feedKey: string, value: string | number):
   });
   if (!res.ok) throw new Error(`[AIO] POST failed — ${res.status} — feed: ${feedKey}, value: ${value}`);
   return res.json() as Promise<AIOFeedValue>;
-}
-
-// ── MOCK ENGINE (cho development) ────────────────────────────────────
-
-const _mockStore: Record<string, number | string> = {};
-
-function _initMockValue(feedKey: string, targetTemp = 65, targetHum = 18): string {
-  if (feedKey.includes('temperature')) return String((targetTemp - 3 + Math.random() * 6).toFixed(1));
-  if (feedKey.includes('humidity'))    return String((targetHum  - 2 + Math.random() * 4).toFixed(1));
-  if (feedKey.includes('light'))       return String(Math.floor(80 + Math.random() * 180));
-  if (feedKey.includes('fan'))         return '0';
-  if (feedKey.includes('relay'))       return '0';
-  if (feedKey.includes('lcd'))         return 'Sẵn sàng';
-  return '0';
-}
-
-/** [MOCK] Đọc feed */
-export function mockFetchFeedLastValue(
-  feedKey: string,
-  opts?: { targetTemp?: number; targetHum?: number },
-): AIOFeedValue {
-  if (_mockStore[feedKey] === undefined) {
-    _mockStore[feedKey] = _initMockValue(feedKey, opts?.targetTemp, opts?.targetHum);
-  }
-  if (feedKey.includes('temperature')) {
-    const cur = parseFloat(String(_mockStore[feedKey]));
-    _mockStore[feedKey] = String(Math.max(30, Math.min(95, cur + (Math.random() - 0.5) * 1.4)).toFixed(1));
-  }
-  if (feedKey.includes('humidity')) {
-    const cur = parseFloat(String(_mockStore[feedKey]));
-    _mockStore[feedKey] = String(Math.max(5, Math.min(80, cur + (Math.random() - 0.5) * 0.8)).toFixed(1));
-  }
-  if (feedKey.includes('light')) {
-    const cur = parseInt(String(_mockStore[feedKey]));
-    _mockStore[feedKey] = String(Math.max(10, Math.min(1000, cur + Math.floor((Math.random() - 0.5) * 30))));
-  }
-  return {
-    id: `mock-${Math.random().toString(36).slice(2, 8)}`,
-    value: String(_mockStore[feedKey]),
-    feed_id: Math.floor(Math.random() * 9999),
-    feed_key: feedKey,
-    created_at: new Date().toISOString(),
-    lat: null, lon: null, ele: null,
-  };
-}
-
-/** [MOCK] Ghi feed */
-export function mockPublishFeedValue(feedKey: string, value: string | number): AIOFeedValue {
-  _mockStore[feedKey] = String(value);
-  return {
-    id: `mock-${Math.random().toString(36).slice(2, 8)}`,
-    value: String(value),
-    feed_id: Math.floor(Math.random() * 9999),
-    feed_key: feedKey,
-    created_at: new Date().toISOString(),
-    lat: null, lon: null, ele: null,
-  };
-}
-
-export function getMockStoreSnapshot(): Record<string, string | number> {
-  return { ..._mockStore };
 }

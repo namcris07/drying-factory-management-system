@@ -1,86 +1,97 @@
 import {
   fetchFeedHistory,
   fetchFeedLastValue,
-  getMockStoreSnapshot,
-  mockFetchFeedLastValue,
-  mockPublishFeedValue,
   publishFeedValue,
 } from '@/features/operator/adafruit/api/adafruit-api';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-describe('adafruitAPI mock engine', () => {
+describe('adafruit-api', () => {
+  const originalFetch = global.fetch;
+
   afterEach(() => {
+    global.fetch = originalFetch;
     vi.restoreAllMocks();
   });
 
-  it('initializes and updates temperature values in a bounded range', () => {
-    vi.spyOn(Math, 'random').mockReturnValue(0.5);
-    const feedKey = `test-temperature-${Date.now()}`;
+  it('normal: fetchFeedLastValue returns parsed data when response is ok', async () => {
+    const payload = {
+      id: '1',
+      value: '21.5',
+      feed_id: 10,
+      feed_key: 'BBC_TEMP',
+      created_at: new Date().toISOString(),
+      lat: null,
+      lon: null,
+      ele: null,
+    };
 
-    const first = mockFetchFeedLastValue(feedKey, { targetTemp: 65 });
-    const second = mockFetchFeedLastValue(feedKey, { targetTemp: 65 });
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => payload,
+    } as Response);
 
-    expect(Number(first.value)).toBeGreaterThanOrEqual(30);
-    expect(Number(first.value)).toBeLessThanOrEqual(95);
-    expect(Number(second.value)).toBeGreaterThanOrEqual(30);
-    expect(Number(second.value)).toBeLessThanOrEqual(95);
+    const result = await fetchFeedLastValue('BBC_TEMP');
+
+    expect(result).toEqual(payload);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 
-  it('writes values to mock store via publish', () => {
-    const feedKey = `test-fan-${Date.now()}`;
+  it('edge: fetchFeedHistory forwards custom limit query', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    } as Response);
 
-    const published = mockPublishFeedValue(feedKey, '1');
-    const snapshot = getMockStoreSnapshot();
+    await fetchFeedHistory('Humidity', 5);
 
-    expect(published.feed_key).toBe(feedKey);
-    expect(published.value).toBe('1');
-    expect(snapshot[feedKey]).toBe('1');
+    const calledUrl = String((global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0]);
+    expect(calledUrl).toContain('/feeds/Humidity/data?limit=5');
   });
 
-  it('returns snapshot as a copy to avoid accidental mutation', () => {
-    const feedKey = `test-relay-${Date.now()}`;
-    mockPublishFeedValue(feedKey, '0');
+  it('error: fetchFeedLastValue throws when response is not ok', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+    } as Response);
 
-    const snapshot = getMockStoreSnapshot();
-    snapshot[feedKey] = '999';
-
-    const nextSnapshot = getMockStoreSnapshot();
-    expect(nextSnapshot[feedKey]).toBe('0');
-  });
-});
-
-describe('adafruitAPI real fetch wrappers', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
+    await expect(fetchFeedLastValue('BBC_TEMP')).rejects.toThrow('[AIO] GET last failed');
   });
 
-  it('throws a descriptive error when last-value endpoint fails', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({ ok: false, status: 500 }),
-    );
+  it('normal: publishFeedValue posts stringified value', async () => {
+    const payload = {
+      id: '2',
+      value: '1',
+      feed_id: 11,
+      feed_key: 'fan_state',
+      created_at: new Date().toISOString(),
+      lat: null,
+      lon: null,
+      ele: null,
+    };
 
-    await expect(fetchFeedLastValue('temperature')).rejects.toThrow('[AIO] GET last failed');
-  });
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => payload,
+    } as Response);
 
-  it('throws a descriptive error when publish endpoint fails', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({ ok: false, status: 403 }),
-    );
+    const result = await publishFeedValue('fan_state', 1);
 
-    await expect(publishFeedValue('fan', 1)).rejects.toThrow('[AIO] POST failed');
-  });
-
-  it('parses JSON response for history endpoint', async () => {
-    const payload = [{ id: '1', value: '42' }];
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: vi.fn().mockResolvedValue(payload),
+    expect(result).toEqual(payload);
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/feeds/fan_state/data'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ value: '1' }),
       }),
     );
+  });
 
-    await expect(fetchFeedHistory('humidity', 3)).resolves.toEqual(payload);
+  it('error: publishFeedValue throws when post fails', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+    } as Response);
+
+    await expect(publishFeedValue('fan_state', 'ON')).rejects.toThrow('[AIO] POST failed');
   });
 });

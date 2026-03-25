@@ -5,7 +5,6 @@
  * Dashboard KPI cho Manager
  */
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import {
   Row,
   Col,
@@ -16,7 +15,6 @@ import {
   Typography,
   Space,
   Progress,
-  Tooltip,
   DatePicker,
   Divider,
 } from 'antd';
@@ -49,29 +47,29 @@ const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;
 
 const batchByZoneData = [
-  { zone: '08:00', zoneA: 9, zoneB: 5, projected: 12 },
-  { zone: '09:00', zoneA: 18, zoneB: 11, projected: 20 },
-  { zone: '10:00', zoneA: 15, zoneB: 10, projected: 18 },
-  { zone: '11:00', zoneA: 13, zoneB: 7, projected: 15 },
-  { zone: '12:00', zoneA: 16, zoneB: 8, projected: 17 },
-  { zone: '13:00', zoneA: 14, zoneB: 6, projected: 16 },
-  { zone: '14:00', zoneA: 21, zoneB: 14, projected: 22 },
-  { zone: '15:00', zoneA: 17, zoneB: 10, projected: 19 },
+  { zone: '08:00', zoneA: 1, projected: 1 },
+  { zone: '09:00', zoneA: 1, projected: 1 },
+  { zone: '10:00', zoneA: 1, projected: 1 },
+  { zone: '11:00', zoneA: 1, projected: 1 },
+  { zone: '12:00', zoneA: 1, projected: 1 },
+  { zone: '13:00', zoneA: 1, projected: 1 },
+  { zone: '14:00', zoneA: 1, projected: 1 },
+  { zone: '15:00', zoneA: 1, projected: 1 },
 ];
 
 const completionData = [
-  { name: 'Hoàn thành', value: 42, color: '#1677ff' },
-  { name: 'Còn lại', value: 6, color: '#e6f4ff' },
+  { name: 'Hoàn thành', value: 1, color: '#1677ff' },
+  { name: 'Còn lại', value: 0, color: '#e6f4ff' },
 ];
 
 const heatLossData = [
-  { day: 'Mon', events: 4 },
-  { day: 'Tue', events: 7 },
-  { day: 'Wed', events: 10 },
-  { day: 'Thu', events: 6 },
-  { day: 'Fri', events: 13 },
-  { day: 'Sat', events: 5 },
-  { day: 'Sun', events: 3 },
+  { day: 'Mon', events: 0 },
+  { day: 'Tue', events: 0 },
+  { day: 'Wed', events: 0 },
+  { day: 'Thu', events: 0 },
+  { day: 'Fri', events: 0 },
+  { day: 'Sat', events: 0 },
+  { day: 'Sun', events: 0 },
 ];
 
 const mtbfData = [
@@ -113,7 +111,6 @@ const CustomDot = (props: CustomDotProps) => {
 };
 
 export default function DashboardPage() {
-  const router = useRouter();
   const [zone, setZone] = useState('all');
 
   return (
@@ -139,8 +136,6 @@ export default function DashboardPage() {
               options={[
                 { value: 'all', label: 'Tất cả khu vực' },
                 { value: 'zoneA', label: 'Zone A' },
-                { value: 'zoneB', label: 'Zone B' },
-                { value: 'zoneC', label: 'Zone C' },
               ]}
             />
             <Button type="primary" icon={<ExportOutlined />}>
@@ -162,12 +157,12 @@ export default function DashboardPage() {
               <div>
                 <Text type="secondary" style={{ fontSize: 13 }}>Máy đang hoạt động</Text>
                 <div style={{ fontSize: 40, fontWeight: 700, color: '#52c41a', lineHeight: 1.2, marginTop: 4 }}>
-                  12<span style={{ fontSize: 20, color: '#8c8c8c', fontWeight: 400 }}>/15</span>
+                  1<span style={{ fontSize: 20, color: '#8c8c8c', fontWeight: 400 }}>/1</span>
                 </div>
                 <Space style={{ marginTop: 8 }}>
                   <RiseOutlined style={{ color: '#52c41a' }} />
                   <Tag color="success" style={{ borderRadius: 20, border: 'none' }}>Đang chạy</Tag>
-                  <Text type="secondary" style={{ fontSize: 12 }}>80% công suất</Text>
+                  <Text type="secondary" style={{ fontSize: 12 }}>100% công suất</Text>
                 </Space>
               </div>
               <div style={{
@@ -190,11 +185,11 @@ export default function DashboardPage() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
                 <Text type="secondary" style={{ fontSize: 13 }}>Chờ / Nghỉ</Text>
-                <div style={{ fontSize: 40, fontWeight: 700, color: '#8c8c8c', lineHeight: 1.2, marginTop: 4 }}>2</div>
+                <div style={{ fontSize: 40, fontWeight: 700, color: '#8c8c8c', lineHeight: 1.2, marginTop: 4 }}>0</div>
                 <Space style={{ marginTop: 8 }}>
                   <PauseCircleOutlined style={{ color: '#faad14' }} />
                   <Tag color="warning" style={{ borderRadius: 20, border: 'none' }}>Chờ lệnh</Tag>
-                  <Text type="secondary" style={{ fontSize: 12 }}>Bảo trì định kỳ</Text>
+                  <Text type="secondary" style={{ fontSize: 12 }}>Không có máy chờ</Text>
                 </Space>
               </div>
               <div style={{
@@ -211,18 +206,17 @@ export default function DashboardPage() {
         {/* Critical Errors */}
         <Col xs={24} sm={8}>
           <Card
-            style={{ borderRadius: 7, borderBottom: '3px solid #ff4d4f', cursor: 'pointer' }}
+            style={{ borderRadius: 7, borderBottom: '3px solid #ff4d4f', cursor: 'default' }}
             styles={{ body: { padding: '20px 24px' } }}
-            onClick={() => router.push('/operator/alerts?filter=error')}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
                 <Text type="secondary" style={{ fontSize: 13 }}>Lỗi Nghiêm trọng</Text>
-                <div style={{ fontSize: 40, fontWeight: 700, color: '#ff4d4f', lineHeight: 1.2, marginTop: 4 }}>1</div>
+                <div style={{ fontSize: 40, fontWeight: 700, color: '#ff4d4f', lineHeight: 1.2, marginTop: 4 }}>0</div>
                 <Space style={{ marginTop: 8 }}>
                   <WarningOutlined style={{ color: '#ff4d4f' }} />
-                  <Tag color="error" style={{ borderRadius: 20, border: 'none' }}>Cần xử lý</Tag>
-                  <Text type="secondary" style={{ fontSize: 12 }}>Zone B - Máy số 4</Text>
+                  <Tag color="default" style={{ borderRadius: 20, border: 'none' }}>Ổn định</Tag>
+                  <Text type="secondary" style={{ fontSize: 12 }}>Không có cảnh báo nghiêm trọng</Text>
                 </Space>
               </div>
               <div style={{
@@ -233,11 +227,9 @@ export default function DashboardPage() {
                 <WarningOutlined style={{ color: '#ff4d4f', fontSize: 22 }} />
               </div>
             </div>
-            <Tooltip title="Nhấn để xem chi tiết lỗi">
-              <Text style={{ color: '#ff4d4f', fontSize: 12, marginTop: 4, display: 'block' }}>
-                → Nhấn để xử lý
-              </Text>
-            </Tooltip>
+            <Text style={{ color: '#8c8c8c', fontSize: 12, marginTop: 4, display: 'block' }}>
+              Không cần thao tác thêm
+            </Text>
           </Card>
         </Col>
       </Row>
@@ -263,7 +255,6 @@ export default function DashboardPage() {
                 <ReTooltip contentStyle={{ borderRadius: 7, border: '1px solid #f0f0f0' }} />
                 <Legend iconType="circle" iconSize={8} />
                 <Bar dataKey="zoneA" name="Zone A" fill="#1677ff" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="zoneB" name="Zone B" fill="#69b1ff" radius={[4, 4, 0, 0]} />
                 <Bar dataKey="projected" name="Dự kiến" fill="#bae0ff" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
@@ -304,7 +295,7 @@ export default function DashboardPage() {
                 textAlign: 'center',
                 pointerEvents: 'none',
               }}>
-                <div style={{ fontSize: 28, fontWeight: 700, color: '#1677ff' }}>87%</div>
+                <div style={{ fontSize: 28, fontWeight: 700, color: '#1677ff' }}>100%</div>
                 <div style={{ fontSize: 12, color: '#8c8c8c' }}>Hoàn thành</div>
               </div>
             </div>
@@ -314,14 +305,14 @@ export default function DashboardPage() {
                 <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#1677ff', display: 'inline-block' }} />
                 <Text type="secondary" style={{ fontSize: 13 }}>Đã hoàn thành</Text>
               </Space>
-              <Text strong>42 mẻ</Text>
+              <Text strong>1 mẻ</Text>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 8px 0' }}>
               <Space>
                 <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#e6f4ff', border: '1px solid #91caff', display: 'inline-block' }} />
                 <Text type="secondary" style={{ fontSize: 13 }}>Còn lại</Text>
               </Space>
-              <Text strong>6 mẻ</Text>
+              <Text strong>0 mẻ</Text>
             </div>
           </Card>
         </Col>
