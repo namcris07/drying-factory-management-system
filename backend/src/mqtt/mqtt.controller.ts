@@ -1,59 +1,47 @@
-import { Controller, Logger } from '@nestjs/common';
-import {
-  MessagePattern,
-  Payload,
-  Ctx,
-  MqttContext,
-} from '@nestjs/microservices';
-import { SensorService } from '../sensor/sensor.service';
+import { Body, Controller, Get, HttpCode, Post } from '@nestjs/common';
+import { PublishCommandDto } from './dto/publish-command.dto';
+import { SimulateIncomingDto } from './dto/simulate-incoming.dto';
+import { SubscribeFeedsDto } from './dto/subscribe-feeds.dto';
+import { MqttService } from './mqtt.service';
 
-@Controller()
+@Controller('mqtt')
 export class MqttController {
-  private readonly logger = new Logger(MqttController.name);
+  constructor(private readonly mqttService: MqttService) {}
 
-  constructor(private readonly sensorService: SensorService) {}
-
-  @MessagePattern('+/feeds/temperature')
-  async handleTemperatureData(
-    @Payload() data: string,
-    @Ctx() context: MqttContext,
-  ) {
-    const topic = context.getTopic(); // Expected: username/feeds/temperature
-    const deviceId = topic.split('/')[0];
-    const value = parseFloat(data);
-
-    this.logger.log(`Received temperature from ${deviceId}: ${value}`);
-
-    if (!isNaN(value)) {
-      await this.sensorService.processAndStoreData(
-        deviceId,
-        'temperature',
-        value,
-      );
-    } else {
-      this.logger.warn(
-        `Invalid temperature format received on topic ${topic}: ${data}`,
-      );
-    }
+  @Get('status')
+  getStatus() {
+    return this.mqttService.getConnectionStatus();
   }
 
-  @MessagePattern('+/feeds/humidity')
-  async handleHumidityData(
-    @Payload() data: string,
-    @Ctx() context: MqttContext,
-  ) {
-    const topic = context.getTopic(); // Expected: username/feeds/humidity
-    const deviceId = topic.split('/')[0];
-    const value = parseFloat(data);
+  @Get('state')
+  getState() {
+    return this.mqttService.getFeedState();
+  }
 
-    this.logger.log(`Received humidity from ${deviceId}: ${value}`);
+  @Post('subscribe')
+  @HttpCode(200)
+  resubscribe(@Body() body: SubscribeFeedsDto) {
+    this.mqttService.subscribeToFeeds(body.feeds);
+    return {
+      ok: true,
+      feeds: body.feeds,
+      note: 'Da cap nhat danh sach feed can lang nghe.',
+    };
+  }
 
-    if (!isNaN(value)) {
-      await this.sensorService.processAndStoreData(deviceId, 'humidity', value);
-    } else {
-      this.logger.warn(
-        `Invalid humidity format received on topic ${topic}: ${data}`,
-      );
-    }
+  @Post('command')
+  @HttpCode(200)
+  async publishCommand(@Body() body: PublishCommandDto) {
+    return this.mqttService.publishCommand(
+      body.feed,
+      body.value,
+      body.optimisticSync ?? true,
+    );
+  }
+
+  @Post('simulate/incoming')
+  @HttpCode(200)
+  async simulateIncoming(@Body() body: SimulateIncomingDto) {
+    return this.mqttService.simulateIncomingFeed(body.feed, body.value);
   }
 }

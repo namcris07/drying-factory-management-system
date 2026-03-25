@@ -204,3 +204,46 @@ export const sensorDataApi = {
     return request<ApiSensorLog[]>(`/sensor-data?${params}`);
   },
 };
+
+// ── MQTT Real-time ─────────────────────────────────────────────────────────
+export type ApiMqttStateItem = {
+  feed: string;
+  topic: string;
+  value: unknown;
+  source: 'adafruit' | 'server-command' | 'server-simulate';
+  updatedAt: string;
+};
+
+export type ApiMqttStatus = {
+  enabled: boolean;
+  connected: boolean;
+  brokerUrl: string;
+  username: string;
+  subscribedFeeds: string[];
+};
+
+export const mqttApi = {
+  getStatus: () => request<ApiMqttStatus>('/mqtt/status'),
+  getState: () => request<ApiMqttStateItem[]>('/mqtt/state'),
+  subscribeFeeds: (feeds: string[]) =>
+    request<{ ok: boolean; feeds: string[]; note: string }>('/mqtt/subscribe', {
+      method: 'POST',
+      body: JSON.stringify({ feeds }),
+    }),
+  publishCommand: (feed: string, value: unknown, optimisticSync = true) =>
+    request<{ ok: boolean; topic: string; payload: string }>('/mqtt/command', {
+      method: 'POST',
+      body: JSON.stringify({ feed, value, optimisticSync }),
+    }),
+  simulateIncoming: (feed: string, value: unknown) =>
+    request<{
+      ok: boolean;
+      topic: string;
+      feed: string;
+      value: unknown;
+      note?: string;
+    }>('/mqtt/simulate/incoming', {
+      method: 'POST',
+      body: JSON.stringify({ feed, value }),
+    }),
+};

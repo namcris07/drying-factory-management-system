@@ -2,14 +2,22 @@ import { renderHook, act, waitFor } from '@testing-library/react';
 import type { DeviceFeeds } from '@/features/operator/adafruit/config/adafruit-config';
 import { useAdafruitIO } from '@/features/operator/adafruit/model/use-adafruit-io';
 
-const { mockFetchFeedLastValue, mockPublishFeedValue } = vi.hoisted(() => ({
-  mockFetchFeedLastValue: vi.fn(),
-  mockPublishFeedValue: vi.fn(),
+const {
+  mockGetStatus,
+  mockGetState,
+  mockPublishCommand,
+} = vi.hoisted(() => ({
+  mockGetStatus: vi.fn(),
+  mockGetState: vi.fn(),
+  mockPublishCommand: vi.fn(),
 }));
 
-vi.mock('@/features/operator/adafruit/api/adafruit-api', () => ({
-  mockFetchFeedLastValue,
-  mockPublishFeedValue,
+vi.mock('@/shared/lib/api', () => ({
+  mqttApi: {
+    getStatus: mockGetStatus,
+    getState: mockGetState,
+    publishCommand: mockPublishCommand,
+  },
 }));
 
 describe('useAdafruitIO', () => {
@@ -18,20 +26,24 @@ describe('useAdafruitIO', () => {
     humidity: 'drytech.m-a1-humidity',
     light: 'drytech.m-a1-light',
     fan: 'drytech.m-a1-fan',
+    fanLevel: 'drytech.m-a1-fan-level',
     relay: 'drytech.m-a1-relay',
     lcd: 'drytech.m-a1-lcd',
   };
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockFetchFeedLastValue.mockImplementation((feedKey: string) => {
-      if (feedKey.includes('temperature')) return { value: '65.2', created_at: '2026-03-04T00:00:00.000Z' };
-      if (feedKey.includes('humidity')) return { value: '18.4', created_at: '2026-03-04T00:00:00.000Z' };
-      if (feedKey.includes('light')) return { value: '220', created_at: '2026-03-04T00:00:00.000Z' };
-      if (feedKey.includes('fan')) return { value: '1', created_at: '2026-03-04T00:00:00.000Z' };
-      if (feedKey.includes('relay')) return { value: '0', created_at: '2026-03-04T00:00:00.000Z' };
-      return { value: 'Sẵn sàng', created_at: '2026-03-04T00:00:00.000Z' };
-    });
+    mockGetStatus.mockResolvedValue({ connected: true });
+    mockGetState.mockResolvedValue([
+      { feed: feeds.temperature, value: 65.2 },
+      { feed: feeds.humidity, value: 18.4 },
+      { feed: feeds.light, value: 220 },
+      { feed: feeds.fan, value: '1' },
+      { feed: feeds.fanLevel, value: 3 },
+      { feed: feeds.relay, value: '0' },
+      { feed: feeds.lcd, value: 'Sẵn sàng' },
+    ]);
+    mockPublishCommand.mockResolvedValue({ ok: true });
   });
 
   it('polls data and updates sensor/output/connection state', async () => {
@@ -46,9 +58,10 @@ describe('useAdafruitIO', () => {
       temperature: 65.2,
       humidity: 18.4,
       light: 220,
-      timestamp: '2026-03-04T00:00:00.000Z',
+      timestamp: expect.any(String),
     });
     expect(result.current.output.fanOn).toBe(true);
+    expect(result.current.output.fanLevel).toBe(3);
     expect(result.current.output.relayOn).toBe(false);
     expect(result.current.output.lcdMessage).toBe('Sẵn sàng');
   });
@@ -60,15 +73,18 @@ describe('useAdafruitIO', () => {
 
     await act(async () => {
       await result.current.setFan(false);
+      await result.current.setFanLevel(4);
       await result.current.setRelay(true);
       await result.current.sendLcd('Drying...');
     });
 
-    expect(mockPublishFeedValue).toHaveBeenCalledWith(feeds.fan, '0');
-    expect(mockPublishFeedValue).toHaveBeenCalledWith(feeds.relay, '1');
-    expect(mockPublishFeedValue).toHaveBeenCalledWith(feeds.lcd, 'Drying...');
+    expect(mockPublishCommand).toHaveBeenCalledWith(feeds.fan, 0, true);
+    expect(mockPublishCommand).toHaveBeenCalledWith(feeds.fanLevel, 4, true);
+    expect(mockPublishCommand).toHaveBeenCalledWith(feeds.relay, 1, true);
+    expect(mockPublishCommand).toHaveBeenCalledWith(feeds.lcd, 'Drying...', true);
     expect(result.current.output).toMatchObject({
       fanOn: false,
+      fanLevel: 4,
       relayOn: true,
       lcdMessage: 'Drying...',
     });

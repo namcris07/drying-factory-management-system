@@ -454,31 +454,70 @@ describe('Controllers coverage', () => {
     expect(configSvc.upsertMany).toHaveBeenCalledWith({ A: '1' });
   });
 
-  it('mqtt controller handles valid and invalid payloads', async () => {
-    const sensorSvc = {
-      processAndStoreData: jest.fn().mockResolvedValue(undefined),
+  it('mqtt controller publish command defaults optimisticSync when omitted', async () => {
+    const mqttSvc = {
+      publishCommand: jest.fn().mockResolvedValue({ ok: true }),
     };
-    const controller = new MqttController(sensorSvc as any);
-    const context = {
-      getTopic: () => 'dev01/feeds/temperature',
-    };
+    const controller = new MqttController(mqttSvc as any);
 
-    await controller.handleTemperatureData('21.5', context as any);
-    await controller.handleTemperatureData('not-a-number', context as any);
-    await controller.handleHumidityData('45.2', {
-      getTopic: () => 'dev02/feeds/humidity',
+    await controller.publishCommand({
+      feed: 'fan_cmd',
+      value: 1,
     } as any);
 
-    expect(sensorSvc.processAndStoreData).toHaveBeenCalledWith(
-      'dev01',
+    await controller.publishCommand({
+      feed: 'relay_cmd',
+      value: 0,
+      optimisticSync: false,
+    } as any);
+
+    expect(mqttSvc.publishCommand).toHaveBeenNthCalledWith(
+      1,
+      'fan_cmd',
+      1,
+      true,
+    );
+    expect(mqttSvc.publishCommand).toHaveBeenNthCalledWith(
+      2,
+      'relay_cmd',
+      0,
+      false,
+    );
+  });
+
+  it('mqtt controller delegates to mqtt service methods', async () => {
+    const mqttSvc = {
+      getConnectionStatus: jest.fn().mockReturnValue({ connected: true }),
+      getFeedState: jest.fn().mockReturnValue([]),
+      subscribeToFeeds: jest.fn(),
+      publishCommand: jest.fn().mockResolvedValue({ ok: true }),
+      simulateIncomingFeed: jest.fn().mockResolvedValue({ ok: true }),
+    };
+
+    const controller = new MqttController(mqttSvc as any);
+
+    expect(controller.getStatus()).toEqual({ connected: true });
+    expect(controller.getState()).toEqual([]);
+
+    await controller.resubscribe({ feeds: ['temperature', 'humidity'] } as any);
+    await controller.publishCommand({
+      feed: 'fan_cmd',
+      value: 'ON',
+      optimisticSync: true,
+    } as any);
+    await controller.simulateIncoming({
+      feed: 'temperature',
+      value: 21.5,
+    } as any);
+
+    expect(mqttSvc.subscribeToFeeds).toHaveBeenCalledWith([
+      'temperature',
+      'humidity',
+    ]);
+    expect(mqttSvc.publishCommand).toHaveBeenCalledWith('fan_cmd', 'ON', true);
+    expect(mqttSvc.simulateIncomingFeed).toHaveBeenCalledWith(
       'temperature',
       21.5,
     );
-    expect(sensorSvc.processAndStoreData).toHaveBeenCalledWith(
-      'dev02',
-      'humidity',
-      45.2,
-    );
-    expect(sensorSvc.processAndStoreData).toHaveBeenCalledTimes(2);
   });
 });

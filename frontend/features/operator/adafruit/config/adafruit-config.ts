@@ -13,6 +13,21 @@ export const AIO_CONFIG = {
   maxRatePerMinute:  30,                    // Free plan: 30 req/phút
 };
 
+// true: tat ca may dung chung 1 bo feed (phu hop demo nhanh voi 1 bo sensor/relay)
+// false: dung feed theo tung machine ID (drytech.m-a1-...)
+const USE_SHARED_FEEDS = process.env.NEXT_PUBLIC_USE_SHARED_FEEDS !== 'false';
+
+const SHARED_FEEDS: DeviceFeeds = {
+  // Co the override qua .env.local neu can
+  temperature: process.env.NEXT_PUBLIC_FEED_TEMPERATURE || 'BBC_TEMP',
+  humidity: process.env.NEXT_PUBLIC_FEED_HUMIDITY || 'Humidity',
+  light: process.env.NEXT_PUBLIC_FEED_LIGHT || 'Lux',
+  fan: process.env.NEXT_PUBLIC_FEED_FAN || 'fan_state',
+  fanLevel: process.env.NEXT_PUBLIC_FEED_FAN_LEVEL || 'fan_level',
+  relay: process.env.NEXT_PUBLIC_FEED_RELAY || 'BBC_LED',
+  lcd: process.env.NEXT_PUBLIC_FEED_LCD || 'lcd_text',
+};
+
 /**
  * Feed Keys cho từng máy sấy
  * INPUT  (đọc từ cảm biến) : temperature, humidity, light
@@ -23,6 +38,7 @@ export interface DeviceFeeds {
   humidity:    string; // DHT20 — %
   light:       string; // Cảm biến ánh sáng — lux
   fan:         string; // Quạt: "1" bật / "0" tắt
+  fanLevel:    string; // Level quạt: 0..5
   relay:       string; // Relay: "1" đóng / "0" ngắt
   lcd:         string; // LCD: ghi chuỗi text
 }
@@ -32,12 +48,17 @@ export interface DeviceFeeds {
  * Ví dụ M-A1 → drytech.m-a1-temperature, drytech.m-a1-fan, ...
  */
 export function getMachineFeeds(machineId: string): DeviceFeeds {
+  if (USE_SHARED_FEEDS) {
+    return SHARED_FEEDS;
+  }
+
   const id = machineId.toLowerCase();
   return {
     temperature: `drytech.${id}-temperature`,
     humidity:    `drytech.${id}-humidity`,
     light:       `drytech.${id}-light`,
     fan:         `drytech.${id}-fan`,
+    fanLevel:    `drytech.${id}-fan-level`,
     relay:       `drytech.${id}-relay`,
     lcd:         `drytech.${id}-lcd`,
   };

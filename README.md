@@ -168,8 +168,6 @@ Trong `backend/prisma/seed.ts` có sẵn demo account:
 - `admin@drytech.io / admin123` (Admin)
 - `manager@drytech.io / 123456` (Manager)
 - `op_a@drytech.io / op123` (Operator)
-- `op_b@drytech.io / op123` (Operator)
-- `op_c@drytech.io / op123` (Operator)
 
 ## 6. TEAM RULE (BẮT BUỘC)
 
