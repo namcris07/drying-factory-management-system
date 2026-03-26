@@ -169,9 +169,8 @@ export default function AdafruitIOPanelPage() {
     connected,
     errorMsg,
     lastUpdated,
-    setFan,
     setFanLevel,
-    setRelay,
+    setLed,
     sendLcd,
     refresh,
   } = useAdafruitIO(feeds);
@@ -226,9 +225,8 @@ export default function AdafruitIOPanelPage() {
         { label: 'Nhiệt độ (DHT20)', key: feeds.temperature, dir: 'IN' },
         { label: 'Độ ẩm (DHT20)', key: feeds.humidity, dir: 'IN' },
         { label: 'Ánh sáng (LDR)', key: feeds.light, dir: 'IN' },
-        { label: 'Quạt làm mát', key: feeds.fan, dir: 'OUT' },
         { label: 'Mức quạt', key: feeds.fanLevel, dir: 'OUT' },
-        { label: 'Relay', key: feeds.relay, dir: 'OUT' },
+        { label: 'LED', key: feeds.led, dir: 'OUT' },
         { label: 'LCD', key: feeds.lcd, dir: 'OUT' },
       ]
     : [];
@@ -236,32 +234,27 @@ export default function AdafruitIOPanelPage() {
   const handleSendLcd = async () => {
     if (!lcdInput.trim()) return;
     setSendingLcd(true);
-    await sendLcd(lcdInput.trim().slice(0, 32));
-    message.success(`Da gui len LCD: ${lcdInput.trim().slice(0, 32)}`);
-    setSendingLcd(false);
-    setLcdInput('');
+    try {
+      const content = lcdInput.trim().slice(0, 32);
+      await sendLcd(content);
+      message.success(`Da gui len LCD: ${content}`);
+      setLcdInput('');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Gui LCD that bai.');
+    } finally {
+      setSendingLcd(false);
+    }
   };
 
-  const handleFanToggle = async (on: boolean) => {
+  const handleLedToggle = async (on: boolean) => {
     if (operatingMode === 'auto') {
       message.error(
         'Hệ thống đang chạy ở chế độ Auto. Không thể điều khiển thiết bị thủ công.'
       );
       return;
     }
-    await setFan(on);
-    message.info(`Quat -> ${on ? 'BAT' : 'TAT'}`);
-  };
-
-  const handleRelayToggle = async (on: boolean) => {
-    if (operatingMode === 'auto') {
-      message.error(
-        'Hệ thống đang chạy ở chế độ Auto. Không thể điều khiển thiết bị thủ công.'
-      );
-      return;
-    }
-    await setRelay(on);
-    message.info(`Relay -> ${on ? 'DONG' : 'NGAT'}`);
+    await setLed(on);
+    message.info(`LED -> ${on ? 'BAT' : 'TAT'}`);
   };
 
   return (
@@ -501,20 +494,13 @@ export default function AdafruitIOPanelPage() {
                 <Text strong style={{ fontSize: 14 }}>Quạt làm mát</Text>
                 <div>
                   <Tag color={output.fanOn ? 'success' : 'default'} style={{ borderRadius: 10, fontSize: 11, marginTop: 4 }}>
-                    {output.fanOn ? 'ĐANG CHẠY' : 'TẮT'}
+                    {output.fanOn ? `MUC ${output.fanLevel}` : 'TẮT'}
                   </Tag>
                 </div>
               </div>
-              <Tooltip title={operatingMode === 'auto' ? 'Bị khóa ở chế độ Auto' : ''}>
-                <Switch 
-                  checked={output.fanOn} 
-                  onChange={(checked) => void handleFanToggle(checked)} 
-                  checkedChildren="Bật" 
-                  unCheckedChildren="Tắt"
-                  disabled={operatingMode === 'auto'}
-                  style={{ opacity: operatingMode === 'auto' ? 0.5 : 1 }}
-                />
-              </Tooltip>
+              <Tag color="processing" style={{ borderRadius: 10 }}>
+                0 - 100
+              </Tag>
             </div>
 
             <div style={{ marginBottom: 18, padding: '12px 16px', background: '#fafafa', borderRadius: 10, border: '1px solid #e8e8e8' }}>
@@ -522,24 +508,24 @@ export default function AdafruitIOPanelPage() {
                 <Text strong style={{ fontSize: 13 }}>Mức quạt</Text>
                 <Tag color="processing">{output.fanLevel}</Tag>
               </div>
-              <Slider min={0} max={5} step={1} value={output.fanLevel} onChange={(value) => void setFanLevel(value)} />
+              <Slider min={0} max={100} step={1} value={output.fanLevel} onChange={(value) => void setFanLevel(value)} disabled={operatingMode === 'auto'} />
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18, padding: '14px 16px', background: output.relayOn ? '#fff7e6' : '#fafafa', borderRadius: 10, border: `1px solid ${output.relayOn ? '#ffd591' : '#e8e8e8'}` }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18, padding: '14px 16px', background: output.ledOn ? '#fff7e6' : '#fafafa', borderRadius: 10, border: `1px solid ${output.ledOn ? '#ffd591' : '#e8e8e8'}` }}>
               <div>
-                <Text strong style={{ fontSize: 14 }}>Relay</Text>
+                <Text strong style={{ fontSize: 14 }}>LED</Text>
                 <div>
-                  <Tag color={output.relayOn ? 'warning' : 'default'} style={{ borderRadius: 10, fontSize: 11, marginTop: 4 }}>
-                    {output.relayOn ? 'ĐANG MỞ' : 'ĐANG ĐÓNG'}
+                  <Tag color={output.ledOn ? 'warning' : 'default'} style={{ borderRadius: 10, fontSize: 11, marginTop: 4 }}>
+                    {output.ledOn ? 'ĐANG BẬT' : 'ĐANG TẮT'}
                   </Tag>
                 </div>
               </div>
               <Tooltip title={operatingMode === 'auto' ? 'Bị khóa ở chế độ Auto' : ''}>
                 <Switch 
-                  checked={output.relayOn} 
-                  onChange={(checked) => void handleRelayToggle(checked)} 
-                  checkedChildren="MỞ" 
-                  unCheckedChildren="ĐÓNG"
+                  checked={output.ledOn} 
+                  onChange={(checked) => void handleLedToggle(checked)} 
+                  checkedChildren="BẬT" 
+                  unCheckedChildren="TẮT"
                   disabled={operatingMode === 'auto'}
                   style={{ opacity: operatingMode === 'auto' ? 0.5 : 1 }}
                 />

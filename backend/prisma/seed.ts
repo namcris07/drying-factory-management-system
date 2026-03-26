@@ -260,7 +260,7 @@ async function main() {
     mqttKeepAlive: '60',
     dataRetentionDays: '365',
     batchAutoArchiveDays: '90',
-    lightSensorThreshold: '500',
+    lightSensorThreshold: '90',
     doorOpenTimeout: '5',
     operatingMode: 'auto',
     operatingModeFeed: 'mode_state',

@@ -171,6 +171,13 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException('value la bat buoc khi publish command');
     }
 
+    const normalizedFeed = this.normalizeFeedKey(feed);
+    const commandValue =
+      normalizedFeed.includes('fanlevel') ||
+      normalizedFeed.includes('fan_level')
+        ? Math.max(0, Math.min(100, Math.round(Number(value) || 0)))
+        : value;
+
     // Check if this is a device control feed and if mode allows it
     if (this.isDeviceControlFeed(feed)) {
       const mode = await this.modeControl.getCurrentMode();
@@ -190,11 +197,11 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     }
 
     const topic = this.toTopic(feed);
-    const payload = this.toPayload(value);
+    const payload = this.toPayload(commandValue);
 
     if (!this.client || !this.isConnected) {
       if (optimisticSync) {
-        await this.saveState(feed, topic, value, 'server-command');
+        await this.saveState(feed, topic, commandValue, 'server-command');
       }
 
       await this.persistSensorLog({
@@ -202,7 +209,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
         source: 'server-command',
         topic,
         feed,
-        value,
+        value: commandValue,
         raw: payload,
       });
 
@@ -228,7 +235,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     });
 
     if (optimisticSync) {
-      await this.saveState(feed, topic, value, 'server-command');
+      await this.saveState(feed, topic, commandValue, 'server-command');
     }
 
     await this.persistSensorLog({
@@ -236,7 +243,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       source: 'server-command',
       topic,
       feed,
-      value,
+      value: commandValue,
       raw: payload,
     });
 
@@ -300,10 +307,8 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       'temperature',
       'humidity',
       'light',
-      'fan_state',
       'fan_level',
-      'relay_state',
-      'led_state',
+      'BBC_LED',
       this.lcdFeedKey,
       'device_status',
       this.modeFeedKey,
@@ -326,15 +331,17 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Check if a feed is a device control command feed (not a sensor data feed)
-   * Device control feeds: fan_state, fan_level, relay_state, led_state, etc.
+   * Device control feeds: fan_level, led/BBC_LED, relay_state, etc.
    * Sensor feeds: temperature, humidity, light, device_status
    */
   private isDeviceControlFeed(feed: string): boolean {
     const controlFeeds = [
-      'fan_state',
       'fan_level',
+      'fanlevel',
       'relay_state',
       'led_state',
+      'bbc_led',
+      'bbcled',
       'heater_state',
       'humidifier_state',
       'door_lock',
@@ -909,6 +916,11 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
 
   private async publishLcdSnapshot(): Promise<void> {
     if (!this.client || !this.isConnected) return;
+
+    const mode = await this.modeControl.getCurrentMode();
+    if (mode !== 'auto') {
+      return;
+    }
 
     const thresholds = await this.getThresholdConfig();
 

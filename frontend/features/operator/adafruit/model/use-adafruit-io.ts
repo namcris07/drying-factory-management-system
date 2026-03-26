@@ -18,15 +18,14 @@ const MAX_HISTORY = 30;
 
 export interface UseAdafruitIOReturn {
   sensor:      SensorData;   // Cảm biến mới nhất
-  output:      DeviceOutput; // Trạng thái đầu ra (fan, relay, LCD)
+  output:      DeviceOutput; // Trạng thái đầu ra (fan level, LED, LCD)
   history:     HistoryPoint[]; // Lịch sử đo cho biểu đồ
   loading:     boolean;
   connected:   boolean;
   errorMsg:    string | null;
   lastUpdated: Date | null;
-  setFan:      (on: boolean) => Promise<void>;
   setFanLevel: (level: number) => Promise<void>;
-  setRelay:    (on: boolean) => Promise<void>;
+  setLed:      (on: boolean) => Promise<void>;
   sendLcd:     (msg: string) => Promise<void>;
   refresh:     () => void;
 }
@@ -37,7 +36,7 @@ export function useAdafruitIO(
   feeds: DeviceFeeds | null,
 ): UseAdafruitIOReturn {
   const [sensor,      setSensor]      = useState<SensorData>({ temperature: 0, humidity: 0, light: 0, timestamp: '' });
-  const [output,      setOutput]      = useState<DeviceOutput>({ fanOn: false, relayOn: false, lcdMessage: '', fanLevel: 0 });
+  const [output,      setOutput]      = useState<DeviceOutput>({ fanOn: false, ledOn: false, lcdMessage: '', fanLevel: 0 });
   const [history,     setHistory]     = useState<HistoryPoint[]>([]);
   const [loading,     setLoading]     = useState(false);
   const [connected,   setConnected]   = useState(false);
@@ -65,10 +64,11 @@ export function useAdafruitIO(
       const temperature = Number(byFeed.get(f.temperature));
       const humidity = Number(byFeed.get(f.humidity));
       const light = Number(byFeed.get(f.light));
-      const fanRaw = byFeed.get(f.fan);
-      const relayRaw = byFeed.get(f.relay);
       const fanLevelRaw = Number(byFeed.get(f.fanLevel));
+      const ledRaw = byFeed.get(f.led);
       const lcdRaw = byFeed.get(f.lcd);
+
+      const nextFanLevel = Number.isFinite(fanLevelRaw) ? Math.max(0, Math.min(100, fanLevelRaw)) : 0;
 
       const newSensor: SensorData = {
         temperature: Number.isFinite(temperature) ? temperature : 0,
@@ -77,17 +77,13 @@ export function useAdafruitIO(
         timestamp: new Date().toISOString(),
       };
       const newOutput: DeviceOutput = {
-        fanOn:
-          fanRaw === '1' ||
-          fanRaw === 1 ||
-          fanRaw === true ||
-          String(fanRaw).toUpperCase() === 'ON',
-        fanLevel: Number.isFinite(fanLevelRaw) ? fanLevelRaw : 0,
-        relayOn:
-          relayRaw === '1' ||
-          relayRaw === 1 ||
-          relayRaw === true ||
-          String(relayRaw).toUpperCase() === 'ON',
+        fanOn: nextFanLevel > 0,
+        fanLevel: nextFanLevel,
+        ledOn:
+          ledRaw === '1' ||
+          ledRaw === 1 ||
+          ledRaw === true ||
+          String(ledRaw).toUpperCase() === 'ON',
         lcdMessage: typeof lcdRaw === 'string' ? lcdRaw : '',
       };
       const now     = new Date();
@@ -119,36 +115,41 @@ export function useAdafruitIO(
 
   // ── Commands ───────────────────────────────────────────────────────────────
 
-  const setFan = async (on: boolean) => {
-    const f = feedsRef.current;
-    if (!f) return;
-    await mqttApi.publishCommand(f.fan, on ? 1 : 0, true);
-    setOutput(prev => ({ ...prev, fanOn: on }));
+  const ensureCommandOk = (
+    result: { ok: boolean; note?: string },
+    fallbackError: string,
+  ) => {
+    if (!result.ok) {
+      throw new Error(result.note || fallbackError);
+    }
   };
 
   const setFanLevel = async (level: number) => {
     const f = feedsRef.current;
     if (!f) return;
-    const nextLevel = Math.max(0, Math.min(5, Math.round(level)));
-    await mqttApi.publishCommand(f.fanLevel, nextLevel, true);
-    setOutput(prev => ({ ...prev, fanLevel: nextLevel }));
+    const nextLevel = Math.max(0, Math.min(100, Math.round(level)));
+    const result = await mqttApi.publishCommand(f.fanLevel, nextLevel, true);
+    ensureCommandOk(result, 'Khong the cap nhat muc quat.');
+    setOutput(prev => ({ ...prev, fanLevel: nextLevel, fanOn: nextLevel > 0 }));
   };
 
-  const setRelay = async (on: boolean) => {
+  const setLed = async (on: boolean) => {
     const f = feedsRef.current;
     if (!f) return;
-    await mqttApi.publishCommand(f.relay, on ? 1 : 0, true);
-    setOutput(prev => ({ ...prev, relayOn: on }));
+    const result = await mqttApi.publishCommand(f.led, on ? 1 : 0, true);
+    ensureCommandOk(result, 'Khong the dieu khien LED.');
+    setOutput(prev => ({ ...prev, ledOn: on }));
   };
 
   const sendLcd = async (msg: string) => {
     const f = feedsRef.current;
     if (!f) return;
-    await mqttApi.publishCommand(f.lcd, msg, true);
+    const result = await mqttApi.publishCommand(f.lcd, msg, true);
+    ensureCommandOk(result, 'Khong the gui noi dung LCD.');
     setOutput(prev => ({ ...prev, lcdMessage: msg }));
   };
 
   const refresh = () => setPollTick(t => t + 1);
 
-  return { sensor, output, history, loading, connected, errorMsg, lastUpdated, setFan, setFanLevel, setRelay, sendLcd, refresh };
+  return { sensor, output, history, loading, connected, errorMsg, lastUpdated, setFanLevel, setLed, sendLcd, refresh };
 }

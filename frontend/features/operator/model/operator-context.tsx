@@ -102,15 +102,6 @@ export function OperatorProvider({ children, zone, operatorName }: OperatorProvi
       return Number.isFinite(num) ? Math.round(num * 10) / 10 : undefined;
     };
 
-    const parseOnOff = (value: unknown) => {
-      return (
-        value === 1 ||
-        value === '1' ||
-        value === true ||
-        String(value).toUpperCase() === 'ON'
-      );
-    };
-
     const syncFromServer = async () => {
       try {
         const state = await mqttApi.getState();
@@ -123,7 +114,8 @@ export function OperatorProvider({ children, zone, operatorName }: OperatorProvi
             const feeds = getMachineFeeds(machine.id);
             const temp = parseNumber(byFeed.get(feeds.temperature));
             const humidity = parseNumber(byFeed.get(feeds.humidity));
-            const fanOn = parseOnOff(byFeed.get(feeds.fan));
+            const fanLevel = parseNumber(byFeed.get(feeds.fanLevel)) ?? 0;
+            const fanOn = fanLevel > 0;
 
             const nextStatus = fanOn
               ? machine.status === 'Error' || machine.status === 'Maintenance'

@@ -3,7 +3,7 @@ import { IsDefined, IsNotEmpty, IsString } from 'class-validator';
 export class SimulateIncomingDto {
   @IsString()
   @IsNotEmpty()
-  // Feed giả lập dữ liệu đi vào server, ví dụ: temperature, humidity, fan_state
+  // Feed giả lập dữ liệu đi vào server, ví dụ: temperature, humidity, fan_level
   feed: string;
 
   @IsDefined()

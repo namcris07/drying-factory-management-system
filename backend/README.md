@@ -51,7 +51,7 @@ DATABASE_URL=postgresql://postgres:yourpassword@localhost:5432/dadn_db
 ADAFRUIT_IO_USERNAME=your_adafruit_username
 ADAFRUIT_IO_KEY=your_adafruit_aio_key
 ADAFRUIT_IO_BROKER_URL=mqtt://io.adafruit.com:1883
-ADAFRUIT_IO_SUBSCRIBE_FEEDS=temperature,humidity,light,fan_state,fan_level,relay_state,led_state,lcd_text,device_status
+ADAFRUIT_IO_SUBSCRIBE_FEEDS=temperature,humidity,light,fan_level,BBC_LED,lcd_text,device_status,mode_state
 
 # Khuyến nghị thêm (được code hỗ trợ fallback)
 FRONTEND_URL=http://localhost:3001
@@ -151,7 +151,7 @@ Do global prefix là `/api`, endpoint đầy đủ bắt đầu bằng `/api/...
 - `GET /api/mqtt/status` -> kiểm tra trạng thái kết nối broker + feed đã subscribe.
 - `GET /api/mqtt/state` -> đọc trạng thái feed gần nhất (dùng để đồng bộ UI nhanh).
 - `POST /api/mqtt/subscribe` -> đổi danh sách feed lắng nghe runtime.
-- `POST /api/mqtt/command` -> publish lệnh điều khiển thiết bị (fan/relay/led/lcd...).
+- `POST /api/mqtt/command` -> publish lệnh điều khiển thiết bị (fan_level/led/lcd...).
 - `POST /api/mqtt/simulate/incoming` -> giả lập dữ liệu từ thiết bị/cloud gửi về.
 
 ### System config
@@ -170,9 +170,9 @@ Khi MQTT bật:
 Ví dụ test nhanh (PowerShell):
 
 ```powershell
-# (a) Bat quat level 2 tu server -> app doc /api/mqtt/state se thay doi ngay
-Invoke-RestMethod -Method POST -Uri http://localhost:3000/api/mqtt/command -ContentType "application/json" -Body '{"feed":"fan_cmd","value":"ON"}'
-Invoke-RestMethod -Method POST -Uri http://localhost:3000/api/mqtt/command -ContentType "application/json" -Body '{"feed":"fan_level","value":2}'
+# (a) Bat quat level 60 va bat LED tu server -> app doc /api/mqtt/state se thay doi ngay
+Invoke-RestMethod -Method POST -Uri http://localhost:3000/api/mqtt/command -ContentType "application/json" -Body '{"feed":"fan_level","value":60}'
+Invoke-RestMethod -Method POST -Uri http://localhost:3000/api/mqtt/command -ContentType "application/json" -Body '{"feed":"BBC_LED","value":1}'
 
 # (b) Gia lap nhiet do tang/giam tu thiet bi -> app va sensor-data thay doi
 Invoke-RestMethod -Method POST -Uri http://localhost:3000/api/mqtt/simulate/incoming -ContentType "application/json" -Body '{"feed":"temperature","value":35.2}'

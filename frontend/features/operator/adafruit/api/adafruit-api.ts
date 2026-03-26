@@ -32,7 +32,7 @@ export interface SensorData {
 export interface DeviceOutput {
   fanOn:      boolean;
   fanLevel:   number;
-  relayOn:    boolean;
+  ledOn:      boolean;
   lcdMessage: string;
 }
 

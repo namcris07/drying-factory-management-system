@@ -25,9 +25,8 @@ describe('useAdafruitIO', () => {
     temperature: 'drytech.m-a1-temperature',
     humidity: 'drytech.m-a1-humidity',
     light: 'drytech.m-a1-light',
-    fan: 'drytech.m-a1-fan',
     fanLevel: 'drytech.m-a1-fan-level',
-    relay: 'drytech.m-a1-relay',
+    led: 'drytech.m-a1-led',
     lcd: 'drytech.m-a1-lcd',
   };
 
@@ -38,9 +37,8 @@ describe('useAdafruitIO', () => {
       { feed: feeds.temperature, value: 65.2 },
       { feed: feeds.humidity, value: 18.4 },
       { feed: feeds.light, value: 220 },
-      { feed: feeds.fan, value: '1' },
       { feed: feeds.fanLevel, value: 3 },
-      { feed: feeds.relay, value: '0' },
+      { feed: feeds.led, value: '0' },
       { feed: feeds.lcd, value: 'Sẵn sàng' },
     ]);
     mockPublishCommand.mockResolvedValue({ ok: true });
@@ -62,7 +60,7 @@ describe('useAdafruitIO', () => {
     });
     expect(result.current.output.fanOn).toBe(true);
     expect(result.current.output.fanLevel).toBe(3);
-    expect(result.current.output.relayOn).toBe(false);
+    expect(result.current.output.ledOn).toBe(false);
     expect(result.current.output.lcdMessage).toBe('Sẵn sàng');
   });
 
@@ -72,22 +70,34 @@ describe('useAdafruitIO', () => {
     await waitFor(() => expect(result.current.connected).toBe(true));
 
     await act(async () => {
-      await result.current.setFan(false);
       await result.current.setFanLevel(4);
-      await result.current.setRelay(true);
+      await result.current.setLed(true);
       await result.current.sendLcd('Drying...');
     });
 
-    expect(mockPublishCommand).toHaveBeenCalledWith(feeds.fan, 0, true);
     expect(mockPublishCommand).toHaveBeenCalledWith(feeds.fanLevel, 4, true);
-    expect(mockPublishCommand).toHaveBeenCalledWith(feeds.relay, 1, true);
+    expect(mockPublishCommand).toHaveBeenCalledWith(feeds.led, 1, true);
     expect(mockPublishCommand).toHaveBeenCalledWith(feeds.lcd, 'Drying...', true);
     expect(result.current.output).toMatchObject({
-      fanOn: false,
+      fanOn: true,
       fanLevel: 4,
-      relayOn: true,
+      ledOn: true,
       lcdMessage: 'Drying...',
     });
+  });
+
+  it('throws error when command is blocked by backend mode guard', async () => {
+    const { result } = renderHook(() => useAdafruitIO(feeds));
+    await waitFor(() => expect(result.current.connected).toBe(true));
+
+    mockPublishCommand.mockResolvedValueOnce({
+      ok: false,
+      note: 'Hệ thống đang chạy ở chế độ Auto. Không thể điều khiển thiết bị thủ công.',
+    });
+
+    await expect(result.current.sendLcd('Hello')).rejects.toThrow(
+      'Hệ thống đang chạy ở chế độ Auto. Không thể điều khiển thiết bị thủ công.',
+    );
   });
 
   it('limits history size to 30 points after repeated refresh', async () => {

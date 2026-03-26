@@ -50,9 +50,9 @@ import { useOperatorContext } from '@/features/operator/model/operator-context';
 import { AIO_THRESHOLDS } from '@/features/operator/adafruit/config/adafruit-config';
 import { getMachineFeeds } from '@/features/operator/adafruit/config/adafruit-config';
 import { useAdafruitIO } from '@/features/operator/adafruit/model/use-adafruit-io';
+import { systemConfigApi } from '@/shared/lib/api';
 
 const { Title, Text, Paragraph } = Typography;
-const { TextArea } = Input;
 const DOOR_OPEN_LUX = AIO_THRESHOLDS.lightDoor;
 const HEAT_LOSS_DELAY_MS = 20_000;
 
@@ -65,6 +65,40 @@ const statusCfg: Record<StatusKey, { text: string; tagColor: 'success' | 'defaul
   Maintenance: { text: 'Bảo trì', tagColor: 'warning' },
 };
 
+function LcdDisplay({ message }: { message: string }) {
+  const lines = (message || ' ')
+    .padEnd(32, ' ')
+    .match(/.{1,16}/g) || ['                '];
+
+  return (
+    <div
+      style={{
+        background: '#1a2a1a',
+        borderRadius: 6,
+        padding: '10px 14px',
+        border: '2px solid #3d5c3d',
+        fontFamily: '"Courier New", Courier, monospace',
+        boxShadow: 'inset 0 2px 8px rgba(0,0,0,0.6)',
+      }}
+    >
+      {lines.slice(0, 2).map((line, i) => (
+        <div
+          key={i}
+          style={{
+            color: '#7cfc00',
+            fontSize: 14,
+            letterSpacing: 2,
+            lineHeight: '22px',
+            minHeight: 22,
+          }}
+        >
+          {line}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function OperatorMachineDetailPage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
@@ -75,6 +109,7 @@ export default function OperatorMachineDetailPage() {
   const [nowSnapshot, setNowSnapshot] = useState<number>(() => Date.now());
   const [selectedRecipeId, setSelectedRecipeId] = useState<number | null>(null);
   const [heatLossDetected, setHeatLossDetected] = useState(false);
+  const [operatingMode, setOperatingMode] = useState<'auto' | 'manual'>('auto');
   const doorOpenSinceRef = useRef<number | null>(null);
   const heatLossNotifiedRef = useRef(false);
 
@@ -95,12 +130,47 @@ export default function OperatorMachineDetailPage() {
     connected,
     errorMsg,
     lastUpdated,
-    setFan,
     setFanLevel,
-    setRelay,
+    setLed,
     sendLcd,
     refresh,
   } = useAdafruitIO(feeds);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const loadMode = async () => {
+      try {
+        const config = await systemConfigApi.getAll();
+        if (!mounted) return;
+        const mode = (config.operatingMode ?? 'auto') as 'auto' | 'manual';
+        setOperatingMode(mode);
+      } catch {
+        if (!mounted) return;
+        setOperatingMode('auto');
+      }
+    };
+
+    void loadMode();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        const config = await systemConfigApi.getAll();
+        const mode = (config.operatingMode ?? 'auto') as 'auto' | 'manual';
+        setOperatingMode(mode);
+      } catch {
+        // Keep current mode on transient errors
+      }
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, []);
 
   const elapsed = (() => {
     if (!machine?.startTime) return '--';
@@ -235,8 +305,7 @@ export default function OperatorMachineDetailPage() {
     }
 
     try {
-      await Promise.all([setFan(true), setRelay(true)]);
-      await setFanLevel(Math.max(1, output.fanLevel || 3));
+      await Promise.all([setLed(true), setFanLevel(Math.max(20, output.fanLevel || 60))]);
 
       const now = new Date();
       const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
@@ -264,7 +333,7 @@ export default function OperatorMachineDetailPage() {
 
   const handleStopBatch = async () => {
     try {
-      await Promise.all([setFan(false), setRelay(false)]);
+      await Promise.all([setFanLevel(0), setLed(false)]);
       setMachines((prev) =>
         prev.map((item) =>
           item.id === machineId
@@ -285,26 +354,35 @@ export default function OperatorMachineDetailPage() {
     }
   };
 
-  const handleFanToggle = async (on: boolean) => {
-    await setFan(on);
-    message.info(`Quat -> ${on ? 'BAT' : 'TAT'}`);
-  };
-
-  const handleRelayToggle = async (on: boolean) => {
-    await setRelay(on);
-    message.info(`Relay -> ${on ? 'DONG' : 'NGAT'}`);
+  const handleLedToggle = async (on: boolean) => {
+    if (operatingMode === 'auto') {
+      message.error('Hệ thống đang chạy ở chế độ Auto. Không thể điều khiển thiết bị thủ công.');
+      return;
+    }
+    await setLed(on);
+    message.info(`LED -> ${on ? 'BAT' : 'TAT'}`);
   };
 
   const handleSendLcd = async () => {
+    if (operatingMode === 'auto') {
+      message.error('LCD ở chế độ Auto chỉ hiển thị thông số. Chuyển sang Manual để gửi tin nhắn.');
+      return;
+    }
     if (!lcdInput.trim()) {
       message.warning('Vui long nhap noi dung LCD.');
       return;
     }
     setSendingLcd(true);
-    await sendLcd(lcdInput.trim().slice(0, 32));
-    message.success(`Da gui len LCD: ${lcdInput.trim().slice(0, 32)}`);
-    setSendingLcd(false);
-    setLcdInput('');
+    try {
+      const content = lcdInput.trim().slice(0, 32);
+      await sendLcd(content);
+      message.success(`Da gui len LCD: ${content}`);
+      setLcdInput('');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Gui LCD that bai.');
+    } finally {
+      setSendingLcd(false);
+    }
   };
 
   return (
@@ -689,8 +767,15 @@ export default function OperatorMachineDetailPage() {
                       <Text strong>
                         <ThunderboltOutlined /> Quạt
                       </Text>
-                      <Switch checked={output.fanOn} onChange={(checked) => void handleFanToggle(checked)} />
-                      <Text type="secondary">Level: {output.fanLevel}</Text>
+                      <Text type="secondary">Mức hiện tại: {output.fanLevel}</Text>
+                      <Slider
+                        min={0}
+                        max={100}
+                        step={1}
+                        value={output.fanLevel}
+                        onChange={(value) => void setFanLevel(value)}
+                        disabled={operatingMode === 'auto'}
+                      />
                     </Space>
                   </Card>
                 </Col>
@@ -698,53 +783,59 @@ export default function OperatorMachineDetailPage() {
                   <Card size="small" style={{ borderRadius: 10 }} styles={{ body: { padding: 12 } }}>
                     <Space direction="vertical" size={6} style={{ width: '100%' }}>
                       <Text strong>
-                        <PlayCircleOutlined /> Relay
+                        <PlayCircleOutlined /> LED
                       </Text>
-                      <Switch checked={output.relayOn} onChange={(checked) => void handleRelayToggle(checked)} />
-                      <Text type="secondary">Trạng thái chạy</Text>
+                      <Switch
+                        checked={output.ledOn}
+                        onChange={(checked) => void handleLedToggle(checked)}
+                        disabled={operatingMode === 'auto'}
+                      />
+                      <Text type="secondary">Trạng thái: {output.ledOn ? 'Bật' : 'Tắt'}</Text>
                     </Space>
-                  </Card>
-                </Col>
-                <Col span={24}>
-                  <Card size="small" style={{ borderRadius: 10 }} styles={{ body: { padding: 12 } }}>
-                    <Text strong style={{ display: 'block', marginBottom: 8 }}>Tốc độ quạt</Text>
-                    <Slider
-                      min={0}
-                      max={5}
-                      step={1}
-                      value={output.fanLevel}
-                      onChange={(value) => void setFanLevel(value)}
-                    />
                   </Card>
                 </Col>
               </Row>
             </div>
 
             <div style={{ marginBottom: 10 }}>
-              <Text strong style={{ display: 'block', marginBottom: 8 }}>LCD Message</Text>
-              <TextArea
-                rows={3}
-                placeholder="Nhập tối đa 32 ký tự..."
-                value={lcdInput}
-                onChange={(e) => setLcdInput(e.target.value)}
-                maxLength={64}
-                style={{ borderRadius: 8, marginBottom: 8 }}
-              />
-              <Button
-                block
-                type="primary"
-                icon={<SendOutlined />}
-                onClick={() => void handleSendLcd()}
-                loading={sendingLcd}
-                style={{ borderRadius: 10, height: 42, fontWeight: 600 }}
-              >
-                Gui LCD
-              </Button>
-              {output.lcdMessage && (
-                <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
-                  Noi dung hien tai: <Text code>{output.lcdMessage}</Text>
-                </Paragraph>
-              )}
+              <div style={{ padding: '14px 16px', background: '#0a1628', borderRadius: 10, border: '1px solid #1a2a3a' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+                  <Text strong style={{ fontSize: 13, color: '#fff' }}>LCD I2C</Text>
+                  <Tag color={operatingMode === 'auto' ? 'green' : 'gold'} style={{ borderRadius: 10, fontSize: 10, marginLeft: 'auto' }}>
+                    {operatingMode === 'auto' ? 'AUTO' : 'MANUAL'}
+                  </Tag>
+                </div>
+
+                <LcdDisplay message={output.lcdMessage} />
+
+                <div style={{ marginTop: 10 }}>
+                  <Input
+                    placeholder="Nhập nội dung LCD (tối đa 32 ký tự)..."
+                    value={lcdInput}
+                    onChange={(e) => setLcdInput(e.target.value.slice(0, 32))}
+                    onPressEnter={() => void handleSendLcd()}
+                    maxLength={32}
+                    disabled={operatingMode === 'auto'}
+                    style={{ borderRadius: 8, marginBottom: 8 }}
+                  />
+                  <Button
+                    block
+                    type="primary"
+                    icon={<SendOutlined />}
+                    onClick={() => void handleSendLcd()}
+                    loading={sendingLcd}
+                    disabled={operatingMode === 'auto' || !lcdInput.trim()}
+                    style={{ borderRadius: 10, height: 42, fontWeight: 600 }}
+                  >
+                    Gửi lên LCD
+                  </Button>
+                  <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0, color: '#c9d4e0' }}>
+                    {operatingMode === 'auto'
+                      ? 'Auto: LCD chỉ hiển thị thông số hệ thống.'
+                      : 'Manual: Có thể gửi tin nhắn tùy ý lên LCD.'}
+                  </Paragraph>
+                </div>
+              </div>
             </div>
 
             {isMaintenance && (
