@@ -22,6 +22,7 @@ import {
 } from 'antd';
 import {
   ArrowLeftOutlined,
+  BellOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
   CloudServerOutlined,
@@ -56,6 +57,12 @@ const { Title, Text } = Typography;
 const { TextArea } = Input;
 const DOOR_OPEN_LUX = AIO_THRESHOLDS.lightDoor;
 const HEAT_LOSS_DELAY_MS = 20_000;
+
+type StageSetpoint = {
+  stageOrder: number;
+  temperatureSetpoint: number;
+  humiditySetpoint: number;
+};
 
 function inferDeviceId(machineCode: string): number | null {
   const m = machineCode.match(/(\d+)$/);
@@ -122,10 +129,14 @@ export default function OperatorMachineDetailPage() {
   const [manualHumiditySetpoint, setManualHumiditySetpoint] = useState(45);
   const [savingSetpoint, setSavingSetpoint] = useState(false);
   const [activeBatchId, setActiveBatchId] = useState<number | null>(null);
+  const [currentBatchStage, setCurrentBatchStage] = useState<number | null>(null);
+  const [currentStageSetpoint, setCurrentStageSetpoint] = useState<StageSetpoint | null>(null);
+  const [pendingManualStageOrder, setPendingManualStageOrder] = useState<number | null>(null);
   const [fanLevelDraft, setFanLevelDraft] = useState(0);
   const [isAdjustingFan, setIsAdjustingFan] = useState(false);
   const doorOpenSinceRef = useRef<number | null>(null);
   const heatLossNotifiedRef = useRef(false);
+  const lastSeenStageRef = useRef<number | null>(null);
 
   const { machines, zone, recipes, setMachines } = useOperatorContext();
 
@@ -135,6 +146,7 @@ export default function OperatorMachineDetailPage() {
   );
 
   const feeds = useMemo(() => getMachineFeeds(machineId), [machineId]);
+  const deviceId = useMemo(() => inferDeviceId(machineId), [machineId]);
 
   const {
     sensor,
@@ -212,18 +224,24 @@ export default function OperatorMachineDetailPage() {
   const recipeTempSetpoint = selectedRecipe?.temp ?? activeRecipe?.temp ?? null;
   const recipeHumiditySetpoint =
     selectedRecipe?.humidity ?? activeRecipe?.humidity ?? null;
+
+  const autoTempSetpoint =
+    currentStageSetpoint?.temperatureSetpoint ?? recipeTempSetpoint;
+  const autoHumiditySetpoint =
+    currentStageSetpoint?.humiditySetpoint ?? recipeHumiditySetpoint;
+
   const formulaTempExceeded =
     !isManualMode &&
-    recipeTempSetpoint !== null &&
+    autoTempSetpoint !== null &&
     Number.isFinite(sensor.temperature) &&
-    sensor.temperature > recipeTempSetpoint;
+    sensor.temperature > autoTempSetpoint;
 
   const visibleTempSetpoint = isManualMode
     ? manualTempSetpoint
-    : (recipeTempSetpoint ?? manualTempSetpoint);
+    : (autoTempSetpoint ?? manualTempSetpoint);
   const visibleHumiditySetpoint = isManualMode
     ? manualHumiditySetpoint
-    : (recipeHumiditySetpoint ?? manualHumiditySetpoint);
+    : (autoHumiditySetpoint ?? manualHumiditySetpoint);
 
   useEffect(() => {
     if (isAdjustingFan) return;
@@ -236,6 +254,85 @@ export default function OperatorMachineDetailPage() {
     }, 30000);
     return () => clearInterval(id);
   }, []);
+
+  useEffect(() => {
+    if (!deviceId) return;
+
+    let mounted = true;
+    const runningStatuses = new Set(['Running', 'InProgress', 'Active', 'Processing']);
+
+    const syncBatchStage = async () => {
+      try {
+        const allBatches = await batchesApi.getAll();
+        if (!mounted) return;
+
+        const activeBatch = allBatches.find(
+          (batch) =>
+            batch.deviceID === deviceId &&
+            runningStatuses.has(batch.batchStatus ?? ''),
+        );
+
+        if (!activeBatch) {
+          lastSeenStageRef.current = null;
+          setActiveBatchId(null);
+          setCurrentBatchStage(null);
+          setCurrentStageSetpoint(null);
+          setPendingManualStageOrder(null);
+          return;
+        }
+
+        setActiveBatchId(activeBatch.batchesID);
+        const stageOrder = activeBatch.currentStage ?? null;
+        setCurrentBatchStage(stageOrder);
+
+        const detail = await batchesApi.getOne(activeBatch.batchesID);
+        if (!mounted) return;
+
+        const stages = detail.recipe?.stages ?? [];
+        const stageFromRecipe =
+          stages.find((stage) => stage.stageOrder === (stageOrder ?? -1)) ??
+          null;
+
+        if (stageFromRecipe) {
+          setCurrentStageSetpoint({
+            stageOrder: stageFromRecipe.stageOrder,
+            temperatureSetpoint: Number(stageFromRecipe.temperatureSetpoint),
+            humiditySetpoint: Number(stageFromRecipe.humiditySetpoint),
+          });
+        } else {
+          setCurrentStageSetpoint(null);
+        }
+
+        if (
+          isManualMode &&
+          stageOrder !== null &&
+          lastSeenStageRef.current !== null &&
+          lastSeenStageRef.current !== stageOrder
+        ) {
+          setPendingManualStageOrder(stageOrder);
+          message.warning(
+            `Đã chuyển sang giai đoạn ${stageOrder}. Chế độ Manual cần Operator xác nhận setpoint.`,
+          );
+        }
+
+        if (stageOrder !== null) {
+          lastSeenStageRef.current = stageOrder;
+        }
+      } catch {
+        // Keep last known stage if API is temporarily unavailable.
+      }
+    };
+
+    void syncBatchStage();
+    const interval = setInterval(() => {
+      void syncBatchStage();
+    }, 5000);
+
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, [deviceId, isManualMode, message]);
 
   useEffect(() => {
     let mounted = true;
@@ -287,6 +384,33 @@ export default function OperatorMachineDetailPage() {
     } finally {
       setSavingSetpoint(false);
     }
+  };
+
+  const applyCurrentStageToManual = async () => {
+    if (!currentStageSetpoint) {
+      message.warning('Chưa đồng bộ được setpoint của giai đoạn hiện tại.');
+      return;
+    }
+
+    const nextTemp = Math.max(
+      30,
+      Math.min(95, Math.round(currentStageSetpoint.temperatureSetpoint)),
+    );
+    const nextHumidity = Math.max(
+      5,
+      Math.min(90, Math.round(currentStageSetpoint.humiditySetpoint)),
+    );
+
+    setManualTempSetpoint(nextTemp);
+    setManualHumiditySetpoint(nextHumidity);
+    await persistManualSetpoint({
+      manualTargetTemp: nextTemp,
+      manualTargetHumidity: nextHumidity,
+    });
+    setPendingManualStageOrder(null);
+    message.success(
+      `Đã áp dụng setpoint giai đoạn ${currentStageSetpoint.stageOrder} cho Manual.`,
+    );
   };
 
   useEffect(() => {
@@ -356,11 +480,17 @@ export default function OperatorMachineDetailPage() {
       return;
     }
 
+    if (!deviceId) {
+      message.warning('Không xác định được DeviceID để khởi động mẻ sấy.');
+      return;
+    }
+
     try {
       const createdBatch = await batchesApi.create({
         recipeID: selectedRecipe.id,
-        deviceID: inferDeviceId(machineId) ?? undefined,
+        deviceID: deviceId,
         operationMode: operatingMode,
+        startTime: new Date().toISOString(),
       });
       setActiveBatchId(createdBatch.batchesID);
 
@@ -396,6 +526,7 @@ export default function OperatorMachineDetailPage() {
           batchResult: 'StoppedByOperator',
         });
         setActiveBatchId(null);
+        setCurrentBatchStage(null);
       }
 
       setMachines((prev) =>
@@ -500,6 +631,11 @@ export default function OperatorMachineDetailPage() {
                   Me say: <Text strong style={{ color: '#1677ff' }}>{activeRecipe.name}</Text>
                 </Text>
               )}
+              {isRunning && (
+                <Tag color={currentBatchStage ? 'processing' : 'default'}>
+                  {currentBatchStage ? `Giai đoạn ${currentBatchStage}` : 'Đang đồng bộ giai đoạn...'}
+                </Tag>
+              )}
               {lastUpdated && (
                 <Text type="secondary" style={{ fontSize: 12 }}>
                   Cập nhật: {lastUpdated.toLocaleTimeString('vi', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
@@ -531,7 +667,37 @@ export default function OperatorMachineDetailPage() {
           type="warning"
           showIcon
           message="Nhiet do dang vuot nguong cong thuc"
-          description={`Hien tai ${sensor.temperature.toFixed(1)}°C > setpoint cong thuc ${Math.round(recipeTempSetpoint as number)}°C. He thong se canh bao, quat chi bat theo logic auto hysteresis.`}
+          description={`Hien tai ${sensor.temperature.toFixed(1)}°C > setpoint cong thuc ${Math.round(autoTempSetpoint as number)}°C. He thong se canh bao, quat chi bat theo logic auto hysteresis.`}
+        />
+      )}
+
+      {isRunning && isManualMode && pendingManualStageOrder !== null && (
+        <Alert
+          style={{ marginBottom: 16, borderRadius: 12 }}
+          type="warning"
+          showIcon
+          icon={<BellOutlined />}
+          message={`Manual mode: cần xác nhận setpoint cho giai đoạn ${pendingManualStageOrder}`}
+          description={
+            currentStageSetpoint
+              ? `Gợi ý từ công thức: ${Math.round(currentStageSetpoint.temperatureSetpoint)}°C / ${Math.round(currentStageSetpoint.humiditySetpoint)}%. Hệ thống không tự ép setpoint trong Manual.`
+              : 'Đang chờ đồng bộ setpoint từ recipe stage. Vui lòng theo dõi trước khi vận hành tiếp.'
+          }
+          action={
+            <Space>
+              <Button size="small" onClick={() => setPendingManualStageOrder(null)}>
+                Tôi sẽ tự chỉnh
+              </Button>
+              <Button
+                size="small"
+                type="primary"
+                onClick={() => void applyCurrentStageToManual()}
+                disabled={!currentStageSetpoint}
+              >
+                Áp dụng setpoint stage
+              </Button>
+            </Space>
+          }
         />
       )}
 
@@ -858,8 +1024,8 @@ export default function OperatorMachineDetailPage() {
                     />
                     <Text style={{ fontSize: 12 }}>
                       {Math.round(visibleTempSetpoint)}°C
-                      {!isManualMode && recipeTempSetpoint !== null
-                        ? ` (từ công thức ${Math.round(recipeTempSetpoint)}°C)`
+                      {!isManualMode && autoTempSetpoint !== null
+                        ? ` (từ ${currentStageSetpoint ? `giai đoạn ${currentStageSetpoint.stageOrder}` : 'công thức'} ${Math.round(autoTempSetpoint)}°C)`
                         : ''}
                     </Text>
                   </div>
@@ -888,8 +1054,8 @@ export default function OperatorMachineDetailPage() {
                     />
                     <Text style={{ fontSize: 12 }}>
                       {Math.round(visibleHumiditySetpoint)}%
-                      {!isManualMode && recipeHumiditySetpoint !== null
-                        ? ` (từ công thức ${Math.round(recipeHumiditySetpoint)}%)`
+                      {!isManualMode && autoHumiditySetpoint !== null
+                        ? ` (từ ${currentStageSetpoint ? `giai đoạn ${currentStageSetpoint.stageOrder}` : 'công thức'} ${Math.round(autoHumiditySetpoint)}%)`
                         : ''}
                     </Text>
                   </div>

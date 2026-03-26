@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsInt } from 'class-validator';
+import { IsDateString, IsInt, IsOptional, IsString } from 'class-validator';
 
 export class CreateBatchDto {
   @IsOptional()
@@ -9,13 +9,14 @@ export class CreateBatchDto {
   @IsString()
   operationMode?: string;
 
-  @IsOptional()
   @IsInt()
-  recipeID?: number;
+  recipeID: number;
 
-  @IsOptional()
   @IsInt()
-  deviceID?: number;
+  deviceID: number;
+
+  @IsDateString()
+  startTime: string;
 }
 
 export class UpdateBatchDto {
@@ -30,4 +31,8 @@ export class UpdateBatchDto {
   @IsOptional()
   @IsInt()
   currentStep?: number;
+
+  @IsOptional()
+  @IsInt()
+  currentStage?: number;
 }

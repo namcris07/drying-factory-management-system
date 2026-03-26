@@ -68,14 +68,23 @@ export function OperatorProvider({ children, zone, operatorName }: OperatorProvi
           humidity: 0,
         }));
 
-        const mappedRecipes: Recipe[] = recipeRows.map((row) => ({
-          id: row.recipeID,
-          name: row.recipeName || `Cong thuc ${row.recipeID}`,
-          fruit: row.recipeFruits || '-',
-          temp: Number(row.steps?.[0]?.temperatureGoal ?? 0),
-          humidity: Number(row.steps?.[0]?.humidityGoal ?? 0),
-          duration: Math.max(1, Math.round((row.timeDurationEst ?? 60) / 60)),
-        }));
+        const mappedRecipes: Recipe[] = recipeRows.map((row) => {
+          const firstStage = row.stages?.[0];
+          const firstStep = row.steps?.[0];
+
+          return {
+            id: row.recipeID,
+            name: row.recipeName || `Cong thuc ${row.recipeID}`,
+            fruit: row.recipeFruits || '-',
+            temp: Number(
+              firstStage?.temperatureSetpoint ?? firstStep?.temperatureGoal ?? 0,
+            ),
+            humidity: Number(
+              firstStage?.humiditySetpoint ?? firstStep?.humidityGoal ?? 0,
+            ),
+            duration: Math.max(1, Math.round((row.timeDurationEst ?? 60) / 60)),
+          };
+        });
 
         setMachines(mappedMachines);
         setRecipes(mappedRecipes);

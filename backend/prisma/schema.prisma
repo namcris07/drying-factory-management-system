@@ -83,10 +83,25 @@ model Recipe {
 
   user                User?                @relation(fields: [userID], references: [userID])
   steps               RecipeStep[]
+  stages              RecipeStage[]
   batches             Batch[]
   recipeModifications RecipeModification[]
 
   @@map("Recipes")
+}
+
+model RecipeStage {
+  stageID              Int    @id @default(autoincrement()) @map("StageID")
+  recipeID             Int?   @map("RecipeID")
+  stageOrder           Int    @map("StageOrder")
+  durationMinutes      Int    @map("DurationMinutes")
+  temperatureSetpoint  Float  @map("TemperatureSetpoint")
+  humiditySetpoint     Float  @map("HumiditySetpoint")
+
+  recipe Recipe? @relation(fields: [recipeID], references: [recipeID])
+
+  @@unique([recipeID, stageOrder])
+  @@map("RecipeStage")
 }
 
 model RecipeStep {
@@ -126,6 +141,9 @@ model Batch {
   batchResult   String? @map("BatchResult")
   operationMode String? @map("OperationMode")
   currentStep   Int?    @map("CurrentStep")
+  currentStage  Int?    @map("CurrentStage")
+  startedAt     DateTime? @db.Timestamptz @map("StartedAt")
+  stageStartedAt DateTime? @db.Timestamptz @map("StageStartedAt")
   recipeID      Int?    @map("RecipeID")
   deviceID      Int?    @map("DeviceID")
 

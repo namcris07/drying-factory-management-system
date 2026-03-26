@@ -8,8 +8,10 @@ import { RecipesService } from './recipes/recipes.service';
 import { SensorService } from './sensor/sensor.service';
 import { SensorDataService } from './sensor-data/sensor-data.service';
 import { SystemConfigService } from './system-config/system-config.service';
+import { SystemConfigUpdateService } from './system-config/system-config-update.service';
 import { UsersService } from './users/users.service';
 import { ZonesService } from './zones/zones.service';
+import { ModeControlService } from './mqtt/mode-control.service';
 import { AlertsController } from './alerts/alerts.controller';
 import { AuthController } from './auth/auth.controller';
 import { BatchesController } from './batches/batches.controller';
@@ -65,6 +67,10 @@ const createPrismaMock = () => ({
     update: jest.fn(),
     delete: jest.fn(),
   },
+  batchOperation: {
+    create: jest.fn(),
+    updateMany: jest.fn(),
+  },
   device: {
     findMany: jest.fn(),
     findUnique: jest.fn(),
@@ -82,6 +88,10 @@ const createPrismaMock = () => ({
   recipeStep: {
     deleteMany: jest.fn(),
   },
+  recipeStage: {
+    deleteMany: jest.fn(),
+    createMany: jest.fn(),
+  },
   sensorDataLog: {
     create: jest.fn(),
     findMany: jest.fn(),
@@ -89,6 +99,11 @@ const createPrismaMock = () => ({
   systemConfig: {
     findMany: jest.fn(),
     upsert: jest.fn(),
+    findUnique: jest.fn(),
+  },
+  systemConfigUpdate: {
+    create: jest.fn(),
+    findMany: jest.fn(),
   },
   zone: {
     findMany: jest.fn(),
@@ -169,12 +184,47 @@ describe('Services coverage', () => {
   });
 
   it('batches service handles create/update/remove and not found', async () => {
-    const service = new BatchesService(prisma as any);
+    const mqttService = {
+      publishCommand: jest.fn().mockResolvedValue({ ok: true }),
+    };
+    const service = new BatchesService(prisma as any, mqttService as any);
+    jest
+      .spyOn(service as any, 'synchronizeBatchProgress')
+      .mockResolvedValue(undefined);
+
     prisma.batch.findMany.mockResolvedValue([]);
-    prisma.batch.findUnique
-      .mockResolvedValueOnce(null)
-      .mockResolvedValue({ batchesID: 1 });
-    prisma.batch.create.mockResolvedValue({ batchesID: 1 });
+    prisma.batch.findUnique.mockImplementation(({ where }: any) =>
+      Promise.resolve(
+        where.batchesID === 10
+          ? null
+          : {
+              batchesID: where.batchesID,
+              batchStatus: 'Running',
+              recipe: { steps: [], stages: [] },
+              device: null,
+              batchOperations: [],
+              alerts: [],
+            },
+      ),
+    );
+    prisma.recipe.findUnique.mockResolvedValue({
+      recipeID: 1,
+      stages: [
+        {
+          stageID: 1,
+          stageOrder: 1,
+          durationMinutes: 10,
+          temperatureSetpoint: 60,
+          humiditySetpoint: 30,
+        },
+      ],
+    });
+    prisma.batch.create.mockResolvedValue({
+      batchesID: 1,
+      recipe: {},
+      device: {},
+    });
+    prisma.batchOperation.create.mockResolvedValue({ operationID: 1 });
     prisma.batch.update.mockResolvedValue({
       batchesID: 1,
       batchStatus: 'Done',
@@ -183,11 +233,16 @@ describe('Services coverage', () => {
 
     await service.findAll();
     await expect(service.findOne(10)).rejects.toBeInstanceOf(NotFoundException);
-    await service.create({ recipeID: 1, deviceID: 1 } as any);
+    await service.create({
+      recipeID: 1,
+      deviceID: 1,
+      startTime: new Date().toISOString(),
+    } as any);
     await service.update(1, { batchStatus: 'Done' } as any);
     await service.remove(1);
 
     expect(prisma.batch.create).toHaveBeenCalled();
+    expect(prisma.batchOperation.create).toHaveBeenCalled();
     expect(prisma.batch.update).toHaveBeenCalled();
     expect(prisma.batch.delete).toHaveBeenCalled();
   });
@@ -221,6 +276,7 @@ describe('Services coverage', () => {
       .mockResolvedValue({ recipeID: 1 });
     prisma.recipe.create.mockResolvedValue({ recipeID: 1 });
     prisma.recipe.update.mockResolvedValue({ recipeID: 1 });
+    prisma.recipeStage.deleteMany.mockResolvedValue({ count: 1 });
     prisma.recipeStep.deleteMany.mockResolvedValue({ count: 1 });
     prisma.recipe.delete.mockResolvedValue({ recipeID: 1 });
 
@@ -234,8 +290,90 @@ describe('Services coverage', () => {
     await service.remove(1);
 
     expect(prisma.recipe.create).toHaveBeenCalled();
+    expect(prisma.recipeStage.deleteMany).toHaveBeenCalled();
     expect(prisma.recipeStep.deleteMany).toHaveBeenCalled();
     expect(prisma.recipe.delete).toHaveBeenCalled();
+  });
+
+  it('mode control service handles mode checks and auto actions', async () => {
+    const service = new ModeControlService(prisma as any);
+
+    prisma.systemConfig.findUnique.mockResolvedValueOnce({
+      configKey: 'operatingMode',
+      configValue: 'manual',
+    });
+    await expect(service.getCurrentMode()).resolves.toBe('manual');
+
+    prisma.systemConfig.findUnique.mockResolvedValueOnce({
+      configKey: 'operatingMode',
+      configValue: 'auto',
+    });
+    await expect(service.isControlAllowed()).resolves.toEqual({
+      allowed: false,
+      reason: 'Auto mode active: System controls devices automatically',
+      mode: 'auto',
+    });
+
+    prisma.systemConfig.findUnique.mockResolvedValueOnce({
+      configKey: 'operatingMode',
+      configValue: 'manual',
+    });
+    await expect(service.isControlAllowed()).resolves.toEqual({
+      allowed: true,
+      reason: 'Manual mode: User has full control',
+      mode: 'manual',
+    });
+
+    prisma.systemConfig.findUnique.mockResolvedValue({
+      configKey: 'operatingMode',
+      configValue: 'auto',
+    });
+    prisma.systemConfig.findMany.mockResolvedValue([
+      { configKey: 'maxTempSafe', configValue: '50' },
+      { configKey: 'minHumidity', configValue: '10' },
+      { configKey: 'maxHumidity', configValue: '80' },
+    ]);
+
+    await expect(
+      service.getAutoControlAction({ temperature: 60 }),
+    ).resolves.toMatchObject({ action: 'turn_off_dryer' });
+    await expect(
+      service.getAutoControlAction({ humidity: 5 }),
+    ).resolves.toMatchObject({
+      action: 'turn_on_humidifier',
+    });
+    await expect(
+      service.getAutoControlAction({ humidity: 90 }),
+    ).resolves.toMatchObject({ action: 'turn_on_fan' });
+
+    prisma.systemConfigUpdate.create.mockResolvedValue({ id: 1 });
+    await expect(
+      service.logModeChange(1, 'auto', 'manual'),
+    ).resolves.toBeUndefined();
+    expect(prisma.systemConfigUpdate.create).toHaveBeenCalled();
+  });
+
+  it('system config update service handles log and query flows', async () => {
+    const service = new SystemConfigUpdateService(prisma as any);
+
+    prisma.systemConfigUpdate.create.mockResolvedValue({ id: 1 });
+    prisma.systemConfigUpdate.findMany
+      .mockResolvedValueOnce([{ id: 1 }])
+      .mockResolvedValueOnce([{ id: 2 }]);
+
+    await expect(
+      service.logConfigUpdate('operatingMode', 1, 'manual override'),
+    ).resolves.toBeUndefined();
+    await expect(
+      service.logConfigUpdate('maxTempSafe', null),
+    ).resolves.toBeUndefined();
+    await expect(service.getRecentUpdates('operatingMode', 5)).resolves.toEqual(
+      [{ id: 1 }],
+    );
+    await expect(service.getAllRecentUpdates(3)).resolves.toEqual([{ id: 2 }]);
+
+    expect(prisma.systemConfigUpdate.create).toHaveBeenCalled();
+    expect(prisma.systemConfigUpdate.findMany).toHaveBeenCalledTimes(2);
   });
 
   it('sensor and sensor-data services process and query logs', async () => {

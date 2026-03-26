@@ -116,6 +116,29 @@ export type ApiRecipeStep = {
   fanStatus: string | null;
 };
 
+export type ApiRecipeStage = {
+  stageID: number;
+  stageOrder: number;
+  durationMinutes: number;
+  temperatureSetpoint: number;
+  humiditySetpoint: number;
+};
+
+export type RecipeStepPayload = {
+  stepNo?: number;
+  temperatureGoal?: number;
+  humidityGoal?: number;
+  durationMinutes?: number;
+  fanStatus?: string;
+};
+
+export type RecipeStagePayload = {
+  stageOrder: number;
+  durationMinutes: number;
+  temperatureSetpoint: number;
+  humiditySetpoint: number;
+};
+
 export type ApiRecipe = {
   recipeID: number;
   recipeName: string | null;
@@ -123,14 +146,32 @@ export type ApiRecipe = {
   timeDurationEst: number | null;
   userID: number | null;
   steps: ApiRecipeStep[];
+  stages: ApiRecipeStage[];
 };
 
 export const recipesApi = {
   getAll: () => request<ApiRecipe[]>('/recipes'),
   getOne: (id: number) => request<ApiRecipe>(`/recipes/${id}`),
-  create: (data: { recipeName: string; recipeFruits?: string; timeDurationEst?: number }) =>
+  create: (data: {
+    recipeName: string;
+    recipeFruits?: string;
+    timeDurationEst?: number;
+    userID?: number;
+    steps?: RecipeStepPayload[];
+    stages?: RecipeStagePayload[];
+  }) =>
     request<ApiRecipe>('/recipes', { method: 'POST', body: JSON.stringify(data) }),
-  update: (id: number, data: Partial<ApiRecipe>) =>
+  update: (
+    id: number,
+    data: Partial<{
+      recipeName: string;
+      recipeFruits: string;
+      timeDurationEst: number;
+      userID: number;
+      steps: RecipeStepPayload[];
+      stages: RecipeStagePayload[];
+    }>,
+  ) =>
     request<ApiRecipe>(`/recipes/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   remove: (id: number) => request<void>(`/recipes/${id}`, { method: 'DELETE' }),
 };
@@ -141,10 +182,20 @@ export type ApiBatch = {
   batchStatus: string | null;
   batchResult: string | null;
   operationMode: string | null;
+  currentStage: number | null;
   currentStep: number | null;
+  startedAt: string | null;
+  stageStartedAt: string | null;
   recipeID: number | null;
   deviceID: number | null;
-  recipe: { recipeID: number; recipeName: string | null } | null;
+  recipe:
+    | {
+        recipeID: number;
+        recipeName: string | null;
+        stages?: ApiRecipeStage[];
+        steps?: ApiRecipeStep[];
+      }
+    | null;
   device: { deviceID: number; deviceName: string | null } | null;
   batchOperations: { boID: number; startedAt: string | null; endedAt: string | null }[];
 };
@@ -152,7 +203,7 @@ export type ApiBatch = {
 export const batchesApi = {
   getAll: () => request<ApiBatch[]>('/batches'),
   getOne: (id: number) => request<ApiBatch>(`/batches/${id}`),
-  create: (data: { recipeID?: number; deviceID?: number; operationMode?: string }) =>
+  create: (data: { recipeID: number; deviceID: number; operationMode?: string; startTime: string }) =>
     request<ApiBatch>('/batches', { method: 'POST', body: JSON.stringify(data) }),
   update: (id: number, data: { batchStatus?: string; batchResult?: string; currentStep?: number }) =>
     request<ApiBatch>(`/batches/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),

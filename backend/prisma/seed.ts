@@ -21,6 +21,7 @@ async function main() {
   await prisma.batch.deleteMany();
   await prisma.sensorDataLog.deleteMany();
   await prisma.recipeStep.deleteMany();
+  await prisma.recipeStage.deleteMany();
   await prisma.recipeModification.deleteMany();
   await prisma.recipe.deleteMany();
   await prisma.device.deleteMany();
@@ -124,6 +125,10 @@ async function main() {
       steps: [
         { stepNo: 1, tempGoal: 65, humGoal: 18, duration: 480, fan: 'On' },
       ],
+      stages: [
+        { stageOrder: 1, duration: 120, tempSetpoint: 58, humSetpoint: 28 },
+        { stageOrder: 2, duration: 360, tempSetpoint: 65, humSetpoint: 18 },
+      ],
     },
     {
       id: 2,
@@ -132,6 +137,10 @@ async function main() {
       duration: 360,
       steps: [
         { stepNo: 1, tempGoal: 70, humGoal: 15, duration: 360, fan: 'On' },
+      ],
+      stages: [
+        { stageOrder: 1, duration: 90, tempSetpoint: 64, humSetpoint: 25 },
+        { stageOrder: 2, duration: 270, tempSetpoint: 70, humSetpoint: 15 },
       ],
     },
     {
@@ -142,6 +151,10 @@ async function main() {
       steps: [
         { stepNo: 1, tempGoal: 60, humGoal: 20, duration: 600, fan: 'On' },
       ],
+      stages: [
+        { stageOrder: 1, duration: 180, tempSetpoint: 54, humSetpoint: 30 },
+        { stageOrder: 2, duration: 420, tempSetpoint: 60, humSetpoint: 20 },
+      ],
     },
     {
       id: 4,
@@ -150,6 +163,10 @@ async function main() {
       duration: 420,
       steps: [
         { stepNo: 1, tempGoal: 55, humGoal: 12, duration: 420, fan: 'Low' },
+      ],
+      stages: [
+        { stageOrder: 1, duration: 120, tempSetpoint: 50, humSetpoint: 20 },
+        { stageOrder: 2, duration: 300, tempSetpoint: 55, humSetpoint: 12 },
       ],
     },
     {
@@ -160,6 +177,10 @@ async function main() {
       steps: [
         { stepNo: 1, tempGoal: 75, humGoal: 10, duration: 300, fan: 'High' },
       ],
+      stages: [
+        { stageOrder: 1, duration: 80, tempSetpoint: 68, humSetpoint: 20 },
+        { stageOrder: 2, duration: 220, tempSetpoint: 75, humSetpoint: 10 },
+      ],
     },
     {
       id: 6,
@@ -168,6 +189,10 @@ async function main() {
       duration: 720,
       steps: [
         { stepNo: 1, tempGoal: 58, humGoal: 16, duration: 720, fan: 'On' },
+      ],
+      stages: [
+        { stageOrder: 1, duration: 180, tempSetpoint: 53, humSetpoint: 26 },
+        { stageOrder: 2, duration: 540, tempSetpoint: 58, humSetpoint: 16 },
       ],
     },
   ];
@@ -192,6 +217,14 @@ async function main() {
             stepStatus: 'Active',
           })),
         },
+        stages: {
+          create: r.stages.map((stage) => ({
+            stageOrder: stage.stageOrder,
+            durationMinutes: stage.duration,
+            temperatureSetpoint: stage.tempSetpoint,
+            humiditySetpoint: stage.humSetpoint,
+          })),
+        },
       },
     });
   }
@@ -199,7 +232,14 @@ async function main() {
 
   // ── 5. Batches ────────────────────────────────────────────────────────────
   const batchData = [
-    { id: 1, status: 'Running', result: null, recipeID: 1, deviceID: 1 },
+    {
+      id: 1,
+      status: 'Running',
+      result: null,
+      recipeID: 1,
+      deviceID: 1,
+      startedAt: new Date(Date.now() - 30 * 60 * 1000),
+    },
   ];
 
   const batches = await Promise.all(
@@ -211,6 +251,9 @@ async function main() {
           batchResult: b.result ?? undefined,
           operationMode: 'Auto',
           currentStep: 1,
+          currentStage: 1,
+          startedAt: b.startedAt,
+          stageStartedAt: b.startedAt,
           recipeID: b.recipeID,
           deviceID: b.deviceID,
         },

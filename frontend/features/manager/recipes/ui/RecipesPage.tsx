@@ -5,17 +5,44 @@
  * Thư viện Công thức sấy — kết nối backend thật
  */
 import { useState, useEffect } from 'react';
-import { Typography, Card, Row, Col, Tag, Button, Space, Input, Table, Spin, App } from 'antd';
-import { BookOutlined, PlusOutlined, SearchOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
-import { recipesApi, ApiRecipe } from '@/shared/lib/api';
+import {
+  Typography,
+  Card,
+  Row,
+  Col,
+  Tag,
+  Button,
+  Space,
+  Input,
+  Table,
+  Spin,
+  App,
+  Form,
+  Modal,
+  InputNumber,
+  Divider,
+} from 'antd';
+import {
+  BookOutlined,
+  PlusOutlined,
+  SearchOutlined,
+  EditOutlined,
+  DeleteOutlined,
+  MinusCircleOutlined,
+} from '@ant-design/icons';
+import { recipesApi, ApiRecipe, RecipeStagePayload, RecipeStepPayload } from '@/shared/lib/api';
 
 const { Title, Text } = Typography;
 
 export default function RecipesPage() {
   const { message, modal } = App.useApp();
+  const [form] = Form.useForm();
   const [recipes, setRecipes] = useState<ApiRecipe[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [editingRecipe, setEditingRecipe] = useState<ApiRecipe | null>(null);
 
   const loadRecipes = async () => {
     try {
@@ -29,6 +56,100 @@ export default function RecipesPage() {
   };
 
   useEffect(() => { loadRecipes(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const openCreateModal = () => {
+    setEditingRecipe(null);
+    form.setFieldsValue({
+      recipeName: '',
+      recipeFruits: '',
+      timeDurationEst: 120,
+      stages: [
+        {
+          stageOrder: 1,
+          durationMinutes: 60,
+          temperatureSetpoint: 55,
+          humiditySetpoint: 30,
+        },
+      ],
+    });
+    setIsModalOpen(true);
+  };
+
+  const openEditModal = (recipe: ApiRecipe) => {
+    setEditingRecipe(recipe);
+    const mappedStages = (recipe.stages ?? []).length > 0
+      ? recipe.stages
+      : (recipe.steps ?? []).map((step, idx) => ({
+        stageOrder: step.stepNo ?? idx + 1,
+        durationMinutes: step.durationMinutes ?? 30,
+        temperatureSetpoint: step.temperatureGoal ?? 50,
+        humiditySetpoint: step.humidityGoal ?? 30,
+      }));
+
+    form.setFieldsValue({
+      recipeName: recipe.recipeName ?? '',
+      recipeFruits: recipe.recipeFruits ?? '',
+      timeDurationEst: recipe.timeDurationEst ?? 60,
+      stages: mappedStages,
+    });
+    setIsModalOpen(true);
+  };
+
+  const handleSaveRecipe = async () => {
+    try {
+      const values = await form.validateFields();
+      setSubmitting(true);
+
+      const rawStages = Array.isArray(values.stages) ? values.stages : [];
+      const normalizedStages: RecipeStagePayload[] = rawStages
+        .map((stage: {
+          stageOrder: number;
+          durationMinutes: number;
+          temperatureSetpoint: number;
+          humiditySetpoint: number;
+        }, idx: number) => ({
+          stageOrder: Number(stage.stageOrder ?? idx + 1),
+          durationMinutes: Number(stage.durationMinutes),
+          temperatureSetpoint: Number(stage.temperatureSetpoint),
+          humiditySetpoint: Number(stage.humiditySetpoint),
+        }))
+        .sort(
+          (a: RecipeStagePayload, b: RecipeStagePayload) =>
+            a.stageOrder - b.stageOrder,
+        );
+
+      const derivedSteps: RecipeStepPayload[] = normalizedStages.map((stage) => ({
+        stepNo: stage.stageOrder,
+        durationMinutes: stage.durationMinutes,
+        temperatureGoal: stage.temperatureSetpoint,
+        humidityGoal: stage.humiditySetpoint,
+        fanStatus: 'On',
+      }));
+
+      const payload = {
+        recipeName: String(values.recipeName).trim(),
+        recipeFruits: String(values.recipeFruits ?? '').trim() || undefined,
+        timeDurationEst: Number(values.timeDurationEst),
+        stages: normalizedStages,
+        steps: derivedSteps,
+      };
+
+      if (editingRecipe) {
+        await recipesApi.update(editingRecipe.recipeID, payload);
+        message.success('Đã cập nhật công thức và RecipeStage.');
+      } else {
+        await recipesApi.create(payload);
+        message.success('Đã tạo công thức mới cùng RecipeStage.');
+      }
+
+      setIsModalOpen(false);
+      await loadRecipes();
+    } catch {
+      // Validation/API error is surfaced by form/message.
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   const handleDelete = (recipe: ApiRecipe) => {
     modal.confirm({
@@ -63,16 +184,16 @@ export default function RecipesPage() {
       render: (v: number) => v ? `${Math.round(v / 60)}h ${v % 60}m` : '—',
     },
     {
-      title: 'Số bước',
-      key: 'steps',
-      render: (_: unknown, r: ApiRecipe) => r.steps?.length ?? 0,
+      title: 'Số stage',
+      key: 'stages',
+      render: (_: unknown, r: ApiRecipe) => r.stages?.length ?? r.steps?.length ?? 0,
     },
     {
       title: 'Thao tác',
       key: 'action',
       render: (_: unknown, record: ApiRecipe) => (
         <Space>
-          <Button size="small" icon={<EditOutlined />} />
+          <Button size="small" icon={<EditOutlined />} onClick={() => openEditModal(record)} />
           <Button size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete(record)} />
         </Space>
       ),
@@ -100,7 +221,7 @@ export default function RecipesPage() {
             onChange={e => setSearch(e.target.value)}
             allowClear
           />
-          <Button type="primary" icon={<PlusOutlined />}>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
             Thêm công thức
           </Button>
         </Space>
@@ -149,6 +270,129 @@ export default function RecipesPage() {
           pagination={{ pageSize: 10 }}
         />
       </Card>
+
+      <Modal
+        title={editingRecipe ? 'Chỉnh sửa công thức' : 'Tạo công thức mới'}
+        open={isModalOpen}
+        onCancel={() => setIsModalOpen(false)}
+        onOk={() => void handleSaveRecipe()}
+        okText={editingRecipe ? 'Lưu thay đổi' : 'Tạo công thức'}
+        cancelText="Hủy"
+        width={920}
+        confirmLoading={submitting}
+      >
+        <Form form={form} layout="vertical">
+          <Row gutter={12}>
+            <Col span={10}>
+              <Form.Item
+                label="Tên công thức"
+                name="recipeName"
+                rules={[{ required: true, message: 'Vui lòng nhập tên công thức.' }]}
+              >
+                <Input placeholder="Ví dụ: Xoài sấy dẻo" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item label="Loại trái cây" name="recipeFruits">
+                <Input placeholder="Ví dụ: Xoài" />
+              </Form.Item>
+            </Col>
+            <Col span={6}>
+              <Form.Item
+                label="Tổng thời gian (phút)"
+                name="timeDurationEst"
+                rules={[{ required: true, message: 'Vui lòng nhập thời gian.' }]}
+              >
+                <InputNumber min={1} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Divider orientation="left" style={{ marginTop: 0 }}>RecipeStage</Divider>
+
+          <Form.List name="stages">
+            {(fields, { add, remove }) => (
+              <Space direction="vertical" style={{ width: '100%' }} size={10}>
+                {fields.map((field, index) => (
+                  <Card key={field.key} size="small" style={{ borderRadius: 10 }}>
+                    <Row gutter={10} align="middle">
+                      <Col span={4}>
+                        <Form.Item
+                          {...field}
+                          label="Thứ tự"
+                          name={[field.name, 'stageOrder']}
+                          rules={[{ required: true, message: 'Nhập thứ tự.' }]}
+                        >
+                          <InputNumber min={1} style={{ width: '100%' }} />
+                        </Form.Item>
+                      </Col>
+                      <Col span={6}>
+                        <Form.Item
+                          {...field}
+                          label="Thời lượng (phút)"
+                          name={[field.name, 'durationMinutes']}
+                          rules={[{ required: true, message: 'Nhập thời lượng.' }]}
+                        >
+                          <InputNumber min={1} style={{ width: '100%' }} />
+                        </Form.Item>
+                      </Col>
+                      <Col span={6}>
+                        <Form.Item
+                          {...field}
+                          label="Nhiệt độ setpoint"
+                          name={[field.name, 'temperatureSetpoint']}
+                          rules={[{ required: true, message: 'Nhập setpoint nhiệt độ.' }]}
+                        >
+                          <InputNumber min={0} max={150} style={{ width: '100%' }} addonAfter="°C" />
+                        </Form.Item>
+                      </Col>
+                      <Col span={6}>
+                        <Form.Item
+                          {...field}
+                          label="Độ ẩm setpoint"
+                          name={[field.name, 'humiditySetpoint']}
+                          rules={[{ required: true, message: 'Nhập setpoint độ ẩm.' }]}
+                        >
+                          <InputNumber min={0} max={100} style={{ width: '100%' }} addonAfter="%" />
+                        </Form.Item>
+                      </Col>
+                      <Col span={2}>
+                        <Button
+                          danger
+                          type="text"
+                          icon={<MinusCircleOutlined />}
+                          onClick={() => remove(field.name)}
+                          disabled={fields.length <= 1}
+                          style={{ marginTop: 28 }}
+                        />
+                      </Col>
+                    </Row>
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      Stage {index + 1}: Hệ thống dùng dữ liệu này để auto chuyển giai đoạn khi Batch đang chạy.
+                    </Text>
+                  </Card>
+                ))}
+
+                <Button
+                  type="dashed"
+                  onClick={() =>
+                    add({
+                      stageOrder: fields.length + 1,
+                      durationMinutes: 30,
+                      temperatureSetpoint: 55,
+                      humiditySetpoint: 30,
+                    })
+                  }
+                  block
+                  icon={<PlusOutlined />}
+                >
+                  Thêm Stage
+                </Button>
+              </Space>
+            )}
+          </Form.List>
+        </Form>
+      </Modal>
     </div>
   );
 }

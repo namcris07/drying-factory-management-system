@@ -9,7 +9,7 @@ export const AIO_CONFIG = {
   username:          process.env.NEXT_PUBLIC_AIO_USERNAME || 'YOUR_AIO_USERNAME',
   apiKey:            process.env.NEXT_PUBLIC_AIO_KEY || 'YOUR_AIO_KEY',
   baseUrl:           'https://io.adafruit.com/api/v2',
-  pollingIntervalMs: 5000,                  // Poll mỗi 5 giây
+  pollingIntervalMs: 15000,                  // Poll mỗi 5 giây
   maxRatePerMinute:  30,                    // Free plan: 30 req/phút
 };
 

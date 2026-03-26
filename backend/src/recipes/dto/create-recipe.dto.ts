@@ -28,6 +28,18 @@ export class CreateRecipeStepDto {
   fanStatus?: string;
 }
 
+export class CreateRecipeStageDto {
+  @IsInt()
+  stageOrder: number;
+
+  @IsInt()
+  durationMinutes: number;
+
+  temperatureSetpoint: number;
+
+  humiditySetpoint: number;
+}
+
 export class CreateRecipeDto {
   @IsNotEmpty()
   @IsString()
@@ -49,4 +61,10 @@ export class CreateRecipeDto {
   @ValidateNested({ each: true })
   @Type(() => CreateRecipeStepDto)
   steps?: CreateRecipeStepDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateRecipeStageDto)
+  stages?: CreateRecipeStageDto[];
 }
