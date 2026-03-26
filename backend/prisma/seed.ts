@@ -262,6 +262,8 @@ async function main() {
     batchAutoArchiveDays: '90',
     lightSensorThreshold: '500',
     doorOpenTimeout: '5',
+    operatingMode: 'auto',
+    operatingModeFeed: 'mode_state',
   };
 
   for (const [key, value] of Object.entries(configData)) {
