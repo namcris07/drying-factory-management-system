@@ -16,6 +16,23 @@ export class SystemConfigService {
     );
   }
 
+  async getOperatingMode(): Promise<{ mode: string }> {
+    const config = await this.prisma.systemConfig.findUnique({
+      where: { configKey: 'operatingMode' },
+    });
+    const mode = config?.configValue ?? 'auto';
+    return { mode };
+  }
+
+  async setOperatingMode(mode: 'auto' | 'manual'): Promise<{ mode: string }> {
+    await this.prisma.systemConfig.upsert({
+      where: { configKey: 'operatingMode' },
+      create: { configKey: 'operatingMode', configValue: mode },
+      update: { configValue: mode },
+    });
+    return { mode };
+  }
+
   async upsert(key: string, value: string) {
     return this.prisma.systemConfig.upsert({
       where: { configKey: key },

@@ -6,7 +6,7 @@
  * Trung tâm thông báo — dùng chung cho tất cả roles.
  * ─────────────────────────────────────────────────────────────────────────────
  */
-import { useState, useMemo, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import {
   Drawer, Badge, Button, Tabs, Typography, Space, Empty,
   Tag, Tooltip,
@@ -19,8 +19,9 @@ import {
 import {
   AppNotification,
   getNotifications, markAsRead, markAllAsRead,
-  clearAllRead, deleteNotification,
+  clearAllRead, deleteNotification, syncAlertNotifications,
 } from '@/features/notifications/model/notification-store';
+import { alertsApi } from '@/shared/lib/api';
 
 const { Text } = Typography;
 type TagColor = NonNullable<React.ComponentProps<typeof Tag>['color']>;
@@ -110,6 +111,32 @@ export default function NotificationCenter({ role, accentColor = '#1677ff' }: No
     () => false,
   );
   const refresh = () => setTick(t => t + 1);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const loadAlerts = async () => {
+      try {
+        const rows = await alertsApi.getAll();
+        if (!mounted) return;
+        syncAlertNotifications(rows);
+        refresh();
+      } catch {
+        // Keep existing notifications when backend is temporarily unavailable.
+      }
+    };
+
+    void loadAlerts();
+
+    const interval = setInterval(() => {
+      void loadAlerts();
+    }, 10000);
+
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, []);
 
   const allNotifs    = useMemo(() => getNotifications(role), [role, tick]); // eslint-disable-line
   const unreadCount  = allNotifs.filter(n => !n.read).length;

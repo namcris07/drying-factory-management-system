@@ -4,7 +4,7 @@
  * app/(operator)/operator/adafruit/page.tsx
  * Adafruit IO Panel
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Alert,
   App,
@@ -13,7 +13,6 @@ import {
   Card,
   Col,
   Collapse,
-  Divider,
   Input,
   Row,
   Select,
@@ -27,11 +26,9 @@ import {
 import {
   ApiOutlined,
   CloudServerOutlined,
-  CodeOutlined,
   DisconnectOutlined,
   ReloadOutlined,
   SendOutlined,
-  WifiOutlined,
 } from '@ant-design/icons';
 import {
   CartesianGrid,
@@ -47,38 +44,61 @@ import { useAdafruitIO } from '@/features/operator/adafruit/model/use-adafruit-i
 import { useOperatorContext } from '@/features/operator/model/operator-context';
 import {
   AIO_CONFIG,
-  AIO_THRESHOLDS,
   getMachineFeeds,
 } from '@/features/operator/adafruit/config/adafruit-config';
+import { systemConfigApi } from '@/shared/lib/api';
+import {
+  DEFAULT_SYSTEM_THRESHOLDS,
+  SystemThresholds,
+  systemThresholdsFromRecord,
+} from '@/shared/lib/system-thresholds';
 
-const { Title, Text, Paragraph } = Typography;
+const { Title, Text } = Typography;
 
-function getTempStatus(t: number): {
+type RuntimeThresholds = {
+  tempMax: number;
+  tempWarn: number;
+  humMin: number;
+  humMax: number;
+  lightDoor: number;
+};
+
+function toRuntimeThresholds(config: SystemThresholds): RuntimeThresholds {
+  return {
+    tempMax: config.maxTempSafe,
+    tempWarn: Math.max(0, config.maxTempSafe - 8),
+    humMin: config.minHumidity,
+    humMax: config.maxHumidity,
+    lightDoor: config.lightSensorThreshold,
+  };
+}
+
+function getTempStatus(t: number, thresholds: RuntimeThresholds): {
   color: string;
   label: string;
   tagColor: 'error' | 'warning' | 'success';
 } {
-  if (t >= AIO_THRESHOLDS.tempMax) {
+  if (t >= thresholds.tempMax) {
     return { color: '#ff4d4f', label: 'NGUY HIEM', tagColor: 'error' };
   }
-  if (t >= AIO_THRESHOLDS.tempWarn) {
+  if (t >= thresholds.tempWarn) {
     return { color: '#faad14', label: 'CANH BAO', tagColor: 'warning' };
   }
   return { color: '#52c41a', label: 'BINH THUONG', tagColor: 'success' };
 }
 
-function getHumStatus(h: number): { color: string; label: string } {
-  if (h < AIO_THRESHOLDS.humMin) return { color: '#faad14', label: 'Qua kho' };
-  if (h > AIO_THRESHOLDS.humMax) return { color: '#faad14', label: 'Qua am' };
+function getHumStatus(h: number, thresholds: RuntimeThresholds): { color: string; label: string } {
+  if (h < thresholds.humMin) return { color: '#faad14', label: 'Qua kho' };
+  if (h > thresholds.humMax) return { color: '#faad14', label: 'Qua am' };
   return { color: '#52c41a', label: 'Binh thuong' };
 }
 
-function getLightStatus(lux: number): {
+function getLightStatus(lux: number, thresholds: RuntimeThresholds): {
   color: string;
   label: string;
   doorWarn: boolean;
 } {
-  if (lux > AIO_THRESHOLDS.lightDoor) {
+  if (lux > thresholds.lightDoor) {
     return {
       color: '#ff4d4f',
       label: `${lux} lux - Cua co the dang mo`,
@@ -128,8 +148,12 @@ function LcdDisplay({ message }: { message: string }) {
 export default function AdafruitIOPanelPage() {
   const { message } = App.useApp();
   const { zone, machines } = useOperatorContext();
+  const [thresholds, setThresholds] = useState<RuntimeThresholds>(
+    toRuntimeThresholds(DEFAULT_SYSTEM_THRESHOLDS),
+  );
   const [lcdInput, setLcdInput] = useState('');
   const [sendingLcd, setSendingLcd] = useState(false);
+  const [operatingMode, setOperatingMode] = useState<'auto' | 'manual'>('auto');
 
   const zoneMachines = machines.filter(m => m.zone === zone);
   const [selectedMachineId, setSelectedMachineId] = useState<string>('');
@@ -152,19 +176,58 @@ export default function AdafruitIOPanelPage() {
     refresh,
   } = useAdafruitIO(feeds);
 
-  const tempSt = getTempStatus(sensor.temperature);
-  const humSt = getHumStatus(sensor.humidity);
-  const lightSt = getLightStatus(sensor.light);
+  const tempSt = getTempStatus(sensor.temperature, thresholds);
+  const humSt = getHumStatus(sensor.humidity, thresholds);
+  const lightSt = getLightStatus(sensor.light, thresholds);
 
-  const isUnconfigured = AIO_CONFIG.username === 'YOUR_AIO_USERNAME';
+  useEffect(() => {
+    let mounted = true;
+
+    const loadThresholds = async () => {
+      try {
+        const config = await systemConfigApi.getAll();
+        if (!mounted) return;
+        const parsed = systemThresholdsFromRecord(config);
+        setThresholds(toRuntimeThresholds(parsed));
+        // Also load operating mode
+        const mode = (config.operatingMode ?? 'auto') as 'auto' | 'manual';
+        setOperatingMode(mode);
+      } catch {
+        if (!mounted) return;
+        setThresholds(toRuntimeThresholds(DEFAULT_SYSTEM_THRESHOLDS));
+      }
+    };
+
+    void loadThresholds();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  // Poll for mode changes every 5 seconds to sync with other browsers
+  useEffect(() => {
+    const pollMode = async () => {
+      try {
+        const config = await systemConfigApi.getAll();
+        const mode = (config.operatingMode ?? 'auto') as 'auto' | 'manual';
+        setOperatingMode(mode);
+      } catch {
+        // Silent fail, keep current mode
+      }
+    };
+
+    const interval = setInterval(pollMode, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   const feedRows = feeds
     ? [
-        { label: 'Nhiet do (DHT20)', key: feeds.temperature, dir: 'IN' },
-        { label: 'Do am (DHT20)', key: feeds.humidity, dir: 'IN' },
-        { label: 'Anh sang (LDR)', key: feeds.light, dir: 'IN' },
-        { label: 'Quat lam mat', key: feeds.fan, dir: 'OUT' },
-        { label: 'Level quat', key: feeds.fanLevel, dir: 'OUT' },
+        { label: 'Nhiệt độ (DHT20)', key: feeds.temperature, dir: 'IN' },
+        { label: 'Độ ẩm (DHT20)', key: feeds.humidity, dir: 'IN' },
+        { label: 'Ánh sáng (LDR)', key: feeds.light, dir: 'IN' },
+        { label: 'Quạt làm mát', key: feeds.fan, dir: 'OUT' },
+        { label: 'Mức quạt', key: feeds.fanLevel, dir: 'OUT' },
         { label: 'Relay', key: feeds.relay, dir: 'OUT' },
         { label: 'LCD', key: feeds.lcd, dir: 'OUT' },
       ]
@@ -180,11 +243,23 @@ export default function AdafruitIOPanelPage() {
   };
 
   const handleFanToggle = async (on: boolean) => {
+    if (operatingMode === 'auto') {
+      message.error(
+        'Hệ thống đang chạy ở chế độ Auto. Không thể điều khiển thiết bị thủ công.'
+      );
+      return;
+    }
     await setFan(on);
     message.info(`Quat -> ${on ? 'BAT' : 'TAT'}`);
   };
 
   const handleRelayToggle = async (on: boolean) => {
+    if (operatingMode === 'auto') {
+      message.error(
+        'Hệ thống đang chạy ở chế độ Auto. Không thể điều khiển thiết bị thủ công.'
+      );
+      return;
+    }
     await setRelay(on);
     message.info(`Relay -> ${on ? 'DONG' : 'NGAT'}`);
   };
@@ -195,11 +270,8 @@ export default function AdafruitIOPanelPage() {
         <div>
           <Title level={3} style={{ margin: 0 }}>
             <CloudServerOutlined style={{ marginRight: 8, color: '#1677ff' }} />
-            Adafruit IO - Giam sat va Dieu khien
+            Adafruit IO - Giám sát và Điều khiển
           </Title>
-          <Text type="secondary">
-            DHT20 (nhiet do, do am) - Anh sang - Quat - Relay - LCD
-          </Text>
         </div>
         <Space wrap>
           <div
@@ -249,7 +321,7 @@ export default function AdafruitIOPanelPage() {
       <Card style={{ borderRadius: 12, marginBottom: 16 }} styles={{ body: { padding: '14px 18px' } }}>
         <Row gutter={16} align="middle">
           <Col xs={24} sm={8} md={6}>
-            <Text strong style={{ fontSize: 13 }}>Chon may say ({zone}):</Text>
+            <Text strong style={{ fontSize: 13 }}>Chọn máy sấy ({zone}):</Text>
           </Col>
           <Col xs={24} sm={16} md={10}>
             <Select
@@ -265,7 +337,7 @@ export default function AdafruitIOPanelPage() {
           <Col xs={24} md={8}>
             {lastUpdated && (
               <Text type="secondary" style={{ fontSize: 11 }}>
-                Cap nhat: {lastUpdated.toLocaleTimeString('vi')} · Poll moi {AIO_CONFIG.pollingIntervalMs / 1000}s
+                Cập nhật: {lastUpdated.toLocaleTimeString('vi')} · Poll mỗi {AIO_CONFIG.pollingIntervalMs / 1000}s
               </Text>
             )}
           </Col>
@@ -280,11 +352,11 @@ export default function AdafruitIOPanelPage() {
                 style={{ borderRadius: 12, border: `2px solid ${tempSt.color}22`, background: `${tempSt.color}08` }}
                 styles={{ body: { padding: '16px', textAlign: 'center' } }}
               >
-                <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 6 }}>Nhiet do (DHT20)</div>
+                <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 6 }}>Nhiệt độ (DHT20)</div>
                 <div style={{ fontSize: 42, fontWeight: 900, color: tempSt.color, lineHeight: 1, marginBottom: 4 }}>
                   {sensor.temperature > 0 ? sensor.temperature.toFixed(1) : '—'}
                 </div>
-                <div style={{ fontSize: 13, color: tempSt.color, fontWeight: 600, marginBottom: 8 }}>degC</div>
+                <div style={{ fontSize: 13, color: tempSt.color, fontWeight: 600, marginBottom: 8 }}>°C</div>
                 <Tag color={tempSt.tagColor} style={{ borderRadius: 12, fontSize: 11 }}>
                   {tempSt.label}
                 </Tag>
@@ -296,7 +368,7 @@ export default function AdafruitIOPanelPage() {
                 style={{ borderRadius: 12, border: '2px solid #1677ff22', background: '#1677ff08' }}
                 styles={{ body: { padding: '16px', textAlign: 'center' } }}
               >
-                <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 6 }}>Do am (DHT20)</div>
+                <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 6 }}>Độ ẩm (DHT20)</div>
                 <div style={{ fontSize: 42, fontWeight: 900, color: '#1677ff', lineHeight: 1, marginBottom: 4 }}>
                   {sensor.humidity > 0 ? sensor.humidity.toFixed(1) : '—'}
                 </div>
@@ -316,13 +388,13 @@ export default function AdafruitIOPanelPage() {
                 }}
                 styles={{ body: { padding: '16px', textAlign: 'center' } }}
               >
-                <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 6 }}>Anh sang</div>
+                <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 6 }}>Ánh sáng</div>
                 <div style={{ fontSize: 42, fontWeight: 900, color: lightSt.doorWarn ? '#ff4d4f' : '#faad14', lineHeight: 1, marginBottom: 4 }}>
                   {sensor.light > 0 ? sensor.light : '—'}
                 </div>
                 <div style={{ fontSize: 13, color: '#8c8c8c', fontWeight: 600, marginBottom: 8 }}>lux</div>
                 <Tag color={lightSt.doorWarn ? 'error' : 'warning'} style={{ borderRadius: 12, fontSize: 11 }}>
-                  {lightSt.doorWarn ? 'Co the cua mo' : 'Binh thuong'}
+                  {lightSt.doorWarn ? 'Có thể cửa mở' : 'Bình thường'}
                 </Tag>
               </Card>
             </Col>
@@ -332,8 +404,8 @@ export default function AdafruitIOPanelPage() {
             style={{ borderRadius: 12, marginBottom: 14 }}
             title={
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: 13, fontWeight: 600 }}>Lich su cam bien (30 diem)</span>
-                {connected && <Badge status="processing" text={<Text style={{ fontSize: 11 }}>Dang cap nhat</Text>} />}
+                <span style={{ fontSize: 13, fontWeight: 600 }}>Lịch sử cảm biến (30 điểm)</span>
+                {connected && <Badge status="processing" text={<Text style={{ fontSize: 11 }}>Đang cập nhật</Text>} />}
               </div>
             }
           >
@@ -347,9 +419,9 @@ export default function AdafruitIOPanelPage() {
                   <ChartTooltip
                     contentStyle={{ borderRadius: 10, border: '1px solid #f0f0f0', fontSize: 12 }}
                     formatter={(val: number, name: string) => {
-                      if (name === 'temperature') return [`${val} degC`, 'Nhiet do'];
-                      if (name === 'humidity') return [`${val}%`, 'Do am'];
-                      return [`${val} lux`, 'Anh sang'];
+                      if (name === 'temperature') return [`${val} °C`, 'Nhiệt độ'];
+                      if (name === 'humidity') return [`${val}%`, 'Độ ẩm'];
+                      return [`${val} lux`, 'Ánh sáng'];
                     }}
                   />
                   <Legend />
@@ -359,7 +431,7 @@ export default function AdafruitIOPanelPage() {
               </ResponsiveContainer>
             ) : (
               <div style={{ height: 220, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <Text type="secondary">Dang thu thap du lieu...</Text>
+                <Text type="secondary">Đang thu thập dữ liệu...</Text>
               </div>
             )}
           </Card>
@@ -384,7 +456,7 @@ export default function AdafruitIOPanelPage() {
                       type="info"
                       showIcon
                       style={{ marginBottom: 12, borderRadius: 8 }}
-                      message="Danh sach feed dang map trong FE"
+                      message="Danh sách feed đang map trong FE"
                     />
                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                       <thead>
@@ -422,23 +494,32 @@ export default function AdafruitIOPanelPage() {
         <Col xs={24} lg={9}>
           <Card
             style={{ borderRadius: 14, marginBottom: 14 }}
-            title={<span style={{ fontWeight: 600 }}>Dieu khien thiet bi dau ra</span>}
+            title={<span style={{ fontWeight: 600 }}>Điều khiển thiết bị đầu ra</span>}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18, padding: '14px 16px', background: output.fanOn ? '#f6ffed' : '#fafafa', borderRadius: 10, border: `1px solid ${output.fanOn ? '#b7eb8f' : '#e8e8e8'}` }}>
               <div>
-                <Text strong style={{ fontSize: 14 }}>Quat lam mat</Text>
+                <Text strong style={{ fontSize: 14 }}>Quạt làm mát</Text>
                 <div>
                   <Tag color={output.fanOn ? 'success' : 'default'} style={{ borderRadius: 10, fontSize: 11, marginTop: 4 }}>
-                    {output.fanOn ? 'DANG CHAY' : 'TAT'}
+                    {output.fanOn ? 'ĐANG CHẠY' : 'TẮT'}
                   </Tag>
                 </div>
               </div>
-              <Switch checked={output.fanOn} onChange={(checked) => void handleFanToggle(checked)} checkedChildren="BAT" unCheckedChildren="TAT" />
+              <Tooltip title={operatingMode === 'auto' ? 'Bị khóa ở chế độ Auto' : ''}>
+                <Switch 
+                  checked={output.fanOn} 
+                  onChange={(checked) => void handleFanToggle(checked)} 
+                  checkedChildren="Bật" 
+                  unCheckedChildren="Tắt"
+                  disabled={operatingMode === 'auto'}
+                  style={{ opacity: operatingMode === 'auto' ? 0.5 : 1 }}
+                />
+              </Tooltip>
             </div>
 
             <div style={{ marginBottom: 18, padding: '12px 16px', background: '#fafafa', borderRadius: 10, border: '1px solid #e8e8e8' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                <Text strong style={{ fontSize: 13 }}>Level quat</Text>
+                <Text strong style={{ fontSize: 13 }}>Mức quạt</Text>
                 <Tag color="processing">{output.fanLevel}</Tag>
               </div>
               <Slider min={0} max={5} step={1} value={output.fanLevel} onChange={(value) => void setFanLevel(value)} />
@@ -449,11 +530,20 @@ export default function AdafruitIOPanelPage() {
                 <Text strong style={{ fontSize: 14 }}>Relay</Text>
                 <div>
                   <Tag color={output.relayOn ? 'warning' : 'default'} style={{ borderRadius: 10, fontSize: 11, marginTop: 4 }}>
-                    {output.relayOn ? 'DONG MACH' : 'NGAT MACH'}
+                    {output.relayOn ? 'ĐANG MỞ' : 'ĐANG ĐÓNG'}
                   </Tag>
                 </div>
               </div>
-              <Switch checked={output.relayOn} onChange={(checked) => void handleRelayToggle(checked)} checkedChildren="DONG" unCheckedChildren="NGAT" />
+              <Tooltip title={operatingMode === 'auto' ? 'Bị khóa ở chế độ Auto' : ''}>
+                <Switch 
+                  checked={output.relayOn} 
+                  onChange={(checked) => void handleRelayToggle(checked)} 
+                  checkedChildren="MỞ" 
+                  unCheckedChildren="ĐÓNG"
+                  disabled={operatingMode === 'auto'}
+                  style={{ opacity: operatingMode === 'auto' ? 0.5 : 1 }}
+                />
+              </Tooltip>
             </div>
 
             <div style={{ padding: '14px 16px', background: '#0a1628', borderRadius: 10, border: '1px solid #1a2a3a' }}>
@@ -466,7 +556,7 @@ export default function AdafruitIOPanelPage() {
 
               <div style={{ marginTop: 10 }}>
                 <Input
-                  placeholder="Nhap noi dung LCD (toi da 32 ky tu)..."
+                  placeholder="Nhập nội dung LCD (tối đa 32 ký tự)..."
                   value={lcdInput}
                   onChange={(e) => setLcdInput(e.target.value.slice(0, 32))}
                   onPressEnter={() => void handleSendLcd()}
@@ -482,74 +572,12 @@ export default function AdafruitIOPanelPage() {
                   disabled={!lcdInput.trim()}
                   style={{ borderRadius: 8 }}
                 >
-                  Gui len LCD
+                  Gửi lên LCD
                 </Button>
               </div>
             </div>
           </Card>
 
-          <Card
-            style={{ borderRadius: 14, marginBottom: 14 }}
-            title={
-              <Space>
-                <WifiOutlined style={{ color: connected ? '#52c41a' : '#8c8c8c' }} />
-                <span style={{ fontSize: 13, fontWeight: 600 }}>Thong tin ket noi</span>
-              </Space>
-            }
-            styles={{ body: { padding: '14px 16px' } }}
-          >
-            {[
-              { label: 'Username', value: AIO_CONFIG.username, mono: true },
-              { label: 'API Key', value: isUnconfigured ? 'Chua cau hinh' : '••••••••••••••••', mono: true },
-              { label: 'Base URL', value: AIO_CONFIG.baseUrl, mono: true },
-              { label: 'Poll Interval', value: `${AIO_CONFIG.pollingIntervalMs / 1000}s`, mono: false },
-              { label: 'Rate Limit', value: `${AIO_CONFIG.maxRatePerMinute} req/phut`, mono: false },
-            ].map((row) => (
-              <div key={row.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8, gap: 8 }}>
-                <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{row.label}</Text>
-                {row.mono ? (
-                  <Text code style={{ fontSize: 11, textAlign: 'right', wordBreak: 'break-all' }}>{row.value}</Text>
-                ) : (
-                  <Text style={{ fontSize: 12 }}>{row.value}</Text>
-                )}
-              </div>
-            ))}
-          </Card>
-
-          <Collapse
-            size="small"
-            style={{ borderRadius: 10 }}
-            items={[
-              {
-                key: 'guide',
-                label: (
-                  <Space>
-                    <CodeOutlined style={{ color: '#722ed1' }} />
-                    <Text style={{ fontSize: 13 }}>Huong dan test nhanh</Text>
-                  </Space>
-                ),
-                children: (
-                  <div style={{ fontSize: 12 }}>
-                    <Paragraph style={{ fontSize: 12, marginBottom: 10 }}>
-                      1. Chon may → xem so lieu cam bien cap nhat theo poll interval.
-                    </Paragraph>
-                    <Paragraph style={{ fontSize: 12, marginBottom: 10 }}>
-                      2. Bat/tat quat, relay, gui LCD de test chieu App → Adafruit.
-                    </Paragraph>
-                    <Paragraph style={{ fontSize: 12, marginBottom: 10 }}>
-                      3. Thay doi feed tren Adafruit dashboard de test chieu Adafruit → App.
-                    </Paragraph>
-                    <Divider style={{ margin: '10px 0' }} />
-                    <Tooltip title="Kiem tra /api/mqtt/status neu du lieu khong nhay">
-                      <Text type="secondary" style={{ fontSize: 11 }}>
-                        Neu khong realtime, kiem tra MQTT status va feed mapping.
-                      </Text>
-                    </Tooltip>
-                  </div>
-                ),
-              },
-            ]}
-          />
         </Col>
       </Row>
     </div>

@@ -33,6 +33,7 @@ import {
 } from '@ant-design/icons';
 import { useOperatorContext } from '@/features/operator/model/operator-context';
 import { Machine, Recipe } from '@/features/operator/model/machine-data';
+import { OperatingModeToggle } from './OperatingModeToggle';
 
 const { Title, Text } = Typography;
 
@@ -103,6 +104,11 @@ export default function OperatorHubPage() {
         .op-machine-card:hover { transform: translateY(-3px); box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important; }
         .op-machine-card { transition: transform 0.18s ease, box-shadow 0.18s ease; }
       `}</style>
+
+      {/* ── Operating Mode Control ── */}
+      <div style={{ marginBottom: 24 }}>
+        <OperatingModeToggle />
+      </div>
 
       {/* ── Page Header ── */}
       <div style={{ marginBottom: 24 }}>

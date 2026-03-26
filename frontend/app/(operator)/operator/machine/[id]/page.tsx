@@ -9,7 +9,6 @@ import {
   Button,
   Card,
   Col,
-  Collapse,
   Divider,
   Input,
   Progress,
@@ -51,7 +50,6 @@ import { useOperatorContext } from '@/features/operator/model/operator-context';
 import { AIO_THRESHOLDS } from '@/features/operator/adafruit/config/adafruit-config';
 import { getMachineFeeds } from '@/features/operator/adafruit/config/adafruit-config';
 import { useAdafruitIO } from '@/features/operator/adafruit/model/use-adafruit-io';
-import { mqttApi } from '@/shared/lib/api';
 
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
@@ -61,10 +59,10 @@ const HEAT_LOSS_DELAY_MS = 20_000;
 type StatusKey = 'Running' | 'Idle' | 'Error' | 'Maintenance';
 
 const statusCfg: Record<StatusKey, { text: string; tagColor: 'success' | 'default' | 'error' | 'warning' }> = {
-  Running: { text: 'Dang chay', tagColor: 'success' },
-  Idle: { text: 'Cho', tagColor: 'default' },
-  Error: { text: 'Loi', tagColor: 'error' },
-  Maintenance: { text: 'Bao tri', tagColor: 'warning' },
+  Running: { text: 'Đang chạy', tagColor: 'success' },
+  Idle: { text: 'Đang chờ', tagColor: 'default' },
+  Error: { text: ' lỗi', tagColor: 'error' },
+  Maintenance: { text: 'Bảo trì', tagColor: 'warning' },
 };
 
 export default function OperatorMachineDetailPage() {
@@ -200,16 +198,6 @@ export default function OperatorMachineDetailPage() {
     return () => clearInterval(id);
   }, [doorOpenByLux, machine, message]);
 
-  const simulateSensor = async (feed: string, value: number) => {
-    try {
-      await mqttApi.simulateIncoming(feed, value);
-      message.success(`Da gia lap ${feed} = ${value}`);
-      refresh();
-    } catch (error) {
-      message.error(error instanceof Error ? error.message : 'Gia lap that bai');
-    }
-  };
-
   if (!machine) {
     return (
       <div style={{ textAlign: 'center', padding: '80px 0' }}>
@@ -238,11 +226,11 @@ export default function OperatorMachineDetailPage() {
 
   const handleQuickStartBatch = async () => {
     if (!selectedRecipe) {
-      message.warning('Vui long chon cong thuc say truoc khi khoi dong.');
+      message.warning('Vui lòng chon công thức say trước khi khởi động.');
       return;
     }
     if (isMaintenance) {
-      message.warning('Thiet bi dang bao tri, khong the khoi dong me say.');
+      message.warning('Thiết bị đang bảo trì, không thể khởi động máy sấy.');
       return;
     }
 
@@ -334,10 +322,10 @@ export default function OperatorMachineDetailPage() {
           <div>
             <Space style={{ marginBottom: 10 }}>
               <Button icon={<ArrowLeftOutlined />} onClick={() => router.push('/operator')}>
-                Ve dashboard
+                Về dashboard
               </Button>
               <Button icon={<ReloadOutlined />} onClick={refresh} loading={loading}>
-                Lam moi
+                Làm mới
               </Button>
             </Space>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
@@ -378,7 +366,7 @@ export default function OperatorMachineDetailPage() {
               )}
               {lastUpdated && (
                 <Text type="secondary" style={{ fontSize: 12 }}>
-                  Cap nhat: {lastUpdated.toLocaleTimeString('vi', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  Cập nhật: {lastUpdated.toLocaleTimeString('vi', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                 </Text>
               )}
             </Space>
@@ -418,9 +406,9 @@ export default function OperatorMachineDetailPage() {
             style={{ borderRadius: 14, marginBottom: 18 }}
             title={
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontWeight: 600 }}>Dien bien nhiet do & do am - 30 mau gan nhat</span>
+                <span style={{ fontWeight: 600 }}>Diễn biến nhiệt độ & độ ẩm - 30 mẫu gần nhất</span>
                 {isRunning && (
-                  <Badge status="processing" text={<Text style={{ fontSize: 12 }}>Dang cap nhat</Text>} />
+                  <Badge status="processing" text={<Text style={{ fontSize: 12 }}>Đang cập nhật</Text>} />
                 )}
               </div>
             }
@@ -449,11 +437,11 @@ export default function OperatorMachineDetailPage() {
                     contentStyle={{ borderRadius: 10, border: '1px solid #f0f0f0', fontSize: 13 }}
                     formatter={(val: number, name: string) => [
                       name === 'temperature' ? `${val}°C` : `${val}%`,
-                      name === 'temperature' ? 'Nhiet do' : 'Do am',
+                      name === 'temperature' ? 'Nhiệt độ' : 'Độ ẩm',
                     ]}
                   />
                   <Legend
-                    formatter={(n) => n === 'temperature' ? 'Nhiet do (°C)' : 'Do am (%)'}
+                    formatter={(n) => n === 'temperature' ? 'Nhiệt độ (°C)' : 'Độ ẩm (%)'}
                     iconType="circle"
                     iconSize={9}
                   />
@@ -493,7 +481,7 @@ export default function OperatorMachineDetailPage() {
                 }}
               >
                 <PauseCircleOutlined style={{ fontSize: 48, marginBottom: 12 }} />
-                <Text type="secondary">Bieu do se hien thi khi may dang chay</Text>
+                <Text type="secondary">Biểu đồ sẽ hiển thị khi máy đang chạy</Text>
               </div>
             )}
           </Card>
@@ -503,7 +491,7 @@ export default function OperatorMachineDetailPage() {
               <Col span={24}>
                 <Card style={{ borderRadius: 12 }} styles={{ body: { padding: '16px 20px' } }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, alignItems: 'center' }}>
-                    <Text strong>Tien do me say</Text>
+                    <Text strong>Tiến độ máy sấy</Text>
                     <Text strong style={{ fontSize: 18, color: '#1677ff' }}>
                       {Math.round(calculatedProgress)}%
                     </Text>
@@ -531,21 +519,21 @@ export default function OperatorMachineDetailPage() {
                 <div style={{ fontSize: 42, marginBottom: 8, lineHeight: 1 }}>
                   {doorOpen ? '🚪' : '🔒'}
                 </div>
-                <Text strong style={{ display: 'block', marginBottom: 6 }}>Cua buong say</Text>
+                <Text strong style={{ display: 'block', marginBottom: 6 }}>Cửa buồng sấy</Text>
                 <Tag
                   color={doorOpen ? 'error' : 'success'}
                   style={{ borderRadius: 20, padding: '3px 12px' }}
                 >
-                  {doorOpen ? 'Dang mo' : 'Da dong'}
+                  {doorOpen ? 'Đang mở' : 'Đã đóng'}
                 </Tag>
                 {doorOpen && (
                   <div style={{ marginTop: 6 }}>
-                    <Text type="danger" style={{ fontSize: 11 }}>Canh bao: mat nhiet!</Text>
+                    <Text type="danger" style={{ fontSize: 11 }}>Cảnh báo: Cửa đang mở</Text>
                   </div>
                 )}
                 <div style={{ marginTop: 6 }}>
                   <Text type="secondary" style={{ fontSize: 11 }}>
-                    Nguong mo cua: lux {'>'} {DOOR_OPEN_LUX}
+                    Ngưỡng mở cửa: lux {'>'} {DOOR_OPEN_LUX}
                   </Text>
                 </div>
               </Card>
@@ -569,7 +557,7 @@ export default function OperatorMachineDetailPage() {
         <Col xs={24} lg={9} xl={8}>
           <Card
             style={{ borderRadius: 14, position: 'sticky', top: 80 }}
-            title={<span style={{ fontWeight: 600 }}>Bang dieu khien</span>}
+            title={<span style={{ fontWeight: 600 }}>Bảng điều khiển</span>}
           >
             <Row gutter={10} style={{ marginBottom: 18 }}>
               <Col span={12}>
@@ -581,11 +569,11 @@ export default function OperatorMachineDetailPage() {
                     textAlign: 'center',
                   }}
                 >
-                  <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Nhiet do</div>
+                  <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Nhiệt độ</div>
                   <div style={{ fontSize: 44, fontWeight: 900, color: '#ff7a00', lineHeight: 1 }}>
                     {sensor.temperature > 0 ? sensor.temperature.toFixed(1) : '--'}
                   </div>
-                  <div style={{ fontSize: 14, color: '#ff7a00', fontWeight: 600 }}>degC</div>
+                  <div style={{ fontSize: 14, color: '#ff7a00', fontWeight: 600 }}>°C</div>
                 </div>
               </Col>
               <Col span={12}>
@@ -597,7 +585,7 @@ export default function OperatorMachineDetailPage() {
                     textAlign: 'center',
                   }}
                 >
-                  <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Do am</div>
+                  <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Độ ẩm</div>
                   <div style={{ fontSize: 44, fontWeight: 900, color: '#1677ff', lineHeight: 1 }}>
                     {sensor.humidity > 0 ? sensor.humidity.toFixed(1) : '--'}
                   </div>
@@ -612,17 +600,17 @@ export default function OperatorMachineDetailPage() {
               <div style={{ marginBottom: 16 }}>
                 <Text strong style={{ display: 'block', marginBottom: 8, fontSize: 14 }}>
                   <BookOutlined style={{ color: '#1677ff', marginRight: 6 }} />
-                  Chon cong thuc khoi dong nhanh
+                  Chọn công thức sấy để khởi động nhanh
                 </Text>
                 <Select
-                  placeholder="Chon cong thuc say..."
+                  placeholder="Chọn công thức sấy..."
                   value={selectedRecipeId ?? undefined}
                   onChange={(value) => setSelectedRecipeId(value)}
                   style={{ width: '100%' }}
                   size="large"
                   options={recipes.map((recipe) => ({
                     value: recipe.id,
-                    label: `${recipe.name} - ${recipe.temp}degC · ${recipe.duration}h`,
+                    label: `${recipe.name} - ${recipe.temp}°C · ${recipe.duration}h`,
                   }))}
                 />
                 {selectedRecipe && (
@@ -640,9 +628,9 @@ export default function OperatorMachineDetailPage() {
                       {selectedRecipe.name}
                     </Text>
                     <div style={{ display: 'flex', gap: 10, marginTop: 4, flexWrap: 'wrap' }}>
-                      <Text type="secondary" style={{ fontSize: 12 }}>Nhiet do: {selectedRecipe.temp}degC</Text>
-                      <Text type="secondary" style={{ fontSize: 12 }}>Do am: {selectedRecipe.humidity}%</Text>
-                      <Text type="secondary" style={{ fontSize: 12 }}>Thoi luong: {selectedRecipe.duration}h</Text>
+                      <Text type="secondary" style={{ fontSize: 12 }}>Nhiệt độ: {selectedRecipe.temp}°C</Text>
+                      <Text type="secondary" style={{ fontSize: 12 }}>Độ ẩm: {selectedRecipe.humidity}%</Text>
+                      <Text type="secondary" style={{ fontSize: 12 }}>Thời lượng: {selectedRecipe.duration}h</Text>
                     </div>
                   </div>
                 )}
@@ -667,7 +655,7 @@ export default function OperatorMachineDetailPage() {
                   marginBottom: 14,
                 }}
               >
-                KHOI DONG NHANH
+                Khởi động nhanh
               </Button>
             )}
 
@@ -686,20 +674,20 @@ export default function OperatorMachineDetailPage() {
                   marginBottom: 14,
                 }}
               >
-                DUNG ME SAY
+                DỪNG MÁY SẤY
               </Button>
             )}
 
             <div style={{ marginBottom: 16 }}>
               <Text strong style={{ display: 'block', marginBottom: 8, fontSize: 14 }}>
-                Dieu khien thiet bi
+                Điều khiển thiết bị
               </Text>
               <Row gutter={[10, 10]}>
                 <Col span={12}>
                   <Card size="small" style={{ borderRadius: 10 }} styles={{ body: { padding: 12 } }}>
                     <Space direction="vertical" size={6} style={{ width: '100%' }}>
                       <Text strong>
-                        <ThunderboltOutlined /> Quat
+                        <ThunderboltOutlined /> Quạt
                       </Text>
                       <Switch checked={output.fanOn} onChange={(checked) => void handleFanToggle(checked)} />
                       <Text type="secondary">Level: {output.fanLevel}</Text>
@@ -713,13 +701,13 @@ export default function OperatorMachineDetailPage() {
                         <PlayCircleOutlined /> Relay
                       </Text>
                       <Switch checked={output.relayOn} onChange={(checked) => void handleRelayToggle(checked)} />
-                      <Text type="secondary">Trang thai chay</Text>
+                      <Text type="secondary">Trạng thái chạy</Text>
                     </Space>
                   </Card>
                 </Col>
                 <Col span={24}>
                   <Card size="small" style={{ borderRadius: 10 }} styles={{ body: { padding: 12 } }}>
-                    <Text strong style={{ display: 'block', marginBottom: 8 }}>Toc do quat</Text>
+                    <Text strong style={{ display: 'block', marginBottom: 8 }}>Tốc độ quạt</Text>
                     <Slider
                       min={0}
                       max={5}
@@ -736,7 +724,7 @@ export default function OperatorMachineDetailPage() {
               <Text strong style={{ display: 'block', marginBottom: 8 }}>LCD Message</Text>
               <TextArea
                 rows={3}
-                placeholder="Nhap toi da 32 ky tu..."
+                placeholder="Nhập tối đa 32 ký tự..."
                 value={lcdInput}
                 onChange={(e) => setLcdInput(e.target.value)}
                 maxLength={64}
@@ -759,43 +747,16 @@ export default function OperatorMachineDetailPage() {
               )}
             </div>
 
-            <Collapse
-              size="small"
-              style={{ borderRadius: 10, marginTop: 12 }}
-              items={[
-                {
-                  key: 'test-sensor',
-                  label: 'Gia lap sensor de test nhanh',
-                  children: (
-                    <Space wrap>
-                      <Button onClick={() => void simulateSensor(feeds.temperature, 35.5)}>
-                        Tang nhiet do
-                      </Button>
-                      <Button onClick={() => void simulateSensor(feeds.temperature, 22.4)}>
-                        Giam nhiet do
-                      </Button>
-                      <Button onClick={() => void simulateSensor(feeds.humidity, 75)}>
-                        Do am cao
-                      </Button>
-                      <Button onClick={() => void simulateSensor(feeds.light, 900)}>
-                        Anh sang cao
-                      </Button>
-                    </Space>
-                  ),
-                },
-              ]}
-            />
-
             {isMaintenance && (
               <div style={{ textAlign: 'center', padding: '16px 0 6px' }}>
-                <Tag color="warning" icon={<ToolOutlined />}>Thiet bi dang bao tri</Tag>
+                <Tag color="warning" icon={<ToolOutlined />}>Thiết bị đang bảo trì</Tag>
               </div>
             )}
 
             <Divider style={{ margin: '12px 0 8px' }} />
             <div style={{ textAlign: 'center' }}>
               <Text type="secondary" style={{ fontSize: 11 }}>
-                Thong so cap nhat luc{' '}
+                Thông số cập nhật lúc{' '}
                 {new Date().toLocaleTimeString('vi', { hour: '2-digit', minute: '2-digit' })}
               </Text>
             </div>
@@ -808,11 +769,11 @@ export default function OperatorMachineDetailPage() {
           style={{ marginTop: 16, borderRadius: 10 }}
           type="error"
           showIcon
-          message="Canh bao trang thai may"
-          description="He thong dang danh dau may trong trang thai Loi. Kiem tra canh bao va xu ly truoc khi van hanh tiep."
+          message="Cảnh báo trạng thái máy"
+          description="Hệ thống đang đánh dấu máy trong trạng thái lỗi. Kiểm tra cảnh báo và xử lý trước khi vận hành tiếp."
           action={
             <Button size="small" danger icon={<ExclamationCircleOutlined />}>
-              Da tiep nhan
+              Đã tiếp nhận
             </Button>
           }
         />
@@ -823,8 +784,8 @@ export default function OperatorMachineDetailPage() {
           style={{ marginTop: 16, borderRadius: 10 }}
           type="error"
           showIcon
-          message="Canh bao that thoat nhiet"
-          description={`Lux hien tai (${sensor.light}) vuot nguong mo cua (${DOOR_OPEN_LUX}) qua ${HEAT_LOSS_DELAY_MS / 1000} giay khi may dang chay.`}
+          message="ảnh báo thất thoát nhiệt"
+          description={`Lux hiện tại (${sensor.light}) vượt ngưỡng mở cửa (${DOOR_OPEN_LUX}) quá ${HEAT_LOSS_DELAY_MS / 1000} giây khi máy đang chạy.`}
         />
       )}
 
@@ -833,11 +794,11 @@ export default function OperatorMachineDetailPage() {
           style={{ marginTop: 16, borderRadius: 10 }}
           type="info"
           showIcon
-          message="May dang cho"
-          description="Bat Quat/Relay tu bang dieu khien ben phai de dua may vao trang thai chay theo logic hien tai."
+          message="Máy đang chờ"
+          description="Bật Quạt/Relay từ bảng điều khiển bên phải để đưa máy vào trạng thái chạy theo logic hiện tại."
           action={
             <Button size="small" icon={<CheckCircleOutlined />}>
-              Da ro
+              Đã nhận
             </Button>
           }
         />

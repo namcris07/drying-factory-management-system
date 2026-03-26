@@ -14,6 +14,8 @@ const { RangePicker } = DatePicker;
 
 type AuditRow = {
   id: string;
+  alertID: number;
+  alertStatus: string;
   timestamp: string;
   level: 'error' | 'warning' | 'info' | 'default';
   user: string;
@@ -27,38 +29,71 @@ export default function AuditLogsPage() {
   const [logs, setLogs] = useState<AuditRow[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const levelMap = (type: string | null): AuditRow['level'] => {
+    if (type === 'error') return 'error';
+    if (type === 'warning') return 'warning';
+    if (type === 'info') return 'info';
+    return 'default';
+  };
+
+  const toRows = (rows: ApiAlert[]): AuditRow[] => {
+    return rows
+      .slice()
+      .sort((a, b) => {
+        const ta = a.alertTime ? new Date(a.alertTime).getTime() : 0;
+        const tb = b.alertTime ? new Date(b.alertTime).getTime() : 0;
+        return tb - ta;
+      })
+      .map((row) => ({
+        id: `alert-${row.alertID}`,
+        alertID: row.alertID,
+        alertStatus: row.alertStatus || 'pending',
+        timestamp: row.alertTime ? new Date(row.alertTime).toLocaleString('vi') : '—',
+        level: levelMap(row.alertType),
+        user: 'System',
+        action: (row.alertType || 'event').toUpperCase(),
+        details: row.alertMessage || 'Không có mô tả',
+        ip: 'internal',
+      }));
+  };
+
+  const loadAlerts = async () => {
+    try {
+      const rows = await alertsApi.getAll();
+      setLogs(toRows(rows));
+    } catch {
+      message.error('Không thể tải nhật ký hệ thống.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const levelMap = (type: string | null): AuditRow['level'] => {
-      if (type === 'error') return 'error';
-      if (type === 'warning') return 'warning';
-      if (type === 'info') return 'info';
-      return 'default';
-    };
-
-    const toRows = (rows: ApiAlert[]): AuditRow[] => {
-      return rows
-        .slice()
-        .sort((a, b) => {
-          const ta = a.alertTime ? new Date(a.alertTime).getTime() : 0;
-          const tb = b.alertTime ? new Date(b.alertTime).getTime() : 0;
-          return tb - ta;
-        })
-        .map((row) => ({
-          id: `alert-${row.alertID}`,
-          timestamp: row.alertTime ? new Date(row.alertTime).toLocaleString('vi') : '—',
-          level: levelMap(row.alertType),
-          user: 'System',
-          action: (row.alertType || 'event').toUpperCase(),
-          details: row.alertMessage || 'Không có mô tả',
-          ip: 'internal',
-        }));
-    };
-
-    alertsApi.getAll()
-      .then((rows) => setLogs(toRows(rows)))
-      .catch(() => message.error('Không thể tải nhật ký hệ thống.'))
-      .finally(() => setLoading(false));
+    void loadAlerts();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleAcknowledge = async (alertID: number) => {
+    try {
+      await alertsApi.acknowledge(alertID);
+      message.success('Admin đã xác nhận cảnh báo.');
+      await loadAlerts();
+    } catch {
+      message.error('Không thể xác nhận cảnh báo.');
+    }
+  };
+
+  const handleResolve = async (alertID: number) => {
+    try {
+      await alertsApi.resolve(alertID, {
+        resolveStatus: 'resolved',
+        resolveNote: 'Admin đã xác nhận xử lý xong',
+      });
+      message.success('Admin đã hoàn tất cảnh báo.');
+      await loadAlerts();
+    } catch {
+      message.error('Không thể hoàn tất cảnh báo.');
+    }
+  };
 
   const counts = useMemo(() => ({
     error: logs.filter((l) => l.level === 'error').length,
@@ -80,8 +115,35 @@ export default function AuditLogsPage() {
     },
     { title: 'Người dùng', dataIndex: 'user' },
     { title: 'Hành động', dataIndex: 'action', render: (v: string) => <Text strong>{v}</Text> },
+    {
+      title: 'Trạng thái xử lý',
+      dataIndex: 'alertStatus',
+      render: (v: string) => (
+        <Tag color={v === 'pending' ? 'error' : v === 'acknowledged' ? 'warning' : 'success'}>
+          {v === 'pending' ? 'Chờ xử lý' : v === 'acknowledged' ? 'Đã nhận' : 'Đã xử lý'}
+        </Tag>
+      ),
+    },
     { title: 'Chi tiết', dataIndex: 'details', ellipsis: true },
     { title: 'IP', dataIndex: 'ip', width: 130 },
+    {
+      title: 'Xác nhận',
+      key: 'confirm',
+      render: (_: unknown, row: AuditRow) => (
+        <Space>
+          {row.alertStatus === 'pending' && (
+            <Button size="small" type="primary" onClick={() => void handleAcknowledge(row.alertID)}>
+              Nhận cảnh báo
+            </Button>
+          )}
+          {row.alertStatus === 'acknowledged' && (
+            <Button size="small" onClick={() => void handleResolve(row.alertID)}>
+              Hoàn tất
+            </Button>
+          )}
+        </Space>
+      ),
+    },
   ];
 
   if (loading) {

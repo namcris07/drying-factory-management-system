@@ -231,10 +231,13 @@ export const mqttApi = {
       body: JSON.stringify({ feeds }),
     }),
   publishCommand: (feed: string, value: unknown, optimisticSync = true) =>
-    request<{ ok: boolean; topic: string; payload: string }>('/mqtt/command', {
+    request<{ ok: boolean; topic: string; payload: string; note?: string }>(
+      '/mqtt/command',
+      {
       method: 'POST',
       body: JSON.stringify({ feed, value, optimisticSync }),
-    }),
+      },
+    ),
   simulateIncoming: (feed: string, value: unknown) =>
     request<{
       ok: boolean;

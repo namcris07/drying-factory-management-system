@@ -13,6 +13,9 @@ export const AIO_CONFIG = {
   maxRatePerMinute:  30,                    // Free plan: 30 req/phút
 };
 
+export const MODE_FEED_KEY =
+  process.env.NEXT_PUBLIC_FEED_MODE || 'mode_state';
+
 // true: tat ca may dung chung 1 bo feed (phu hop demo nhanh voi 1 bo sensor/relay)
 // false: dung feed theo tung machine ID (drytech.m-a1-...)
 const USE_SHARED_FEEDS = process.env.NEXT_PUBLIC_USE_SHARED_FEEDS !== 'false';
