@@ -32,6 +32,7 @@ let _notifications: AppNotification[] = [
 let _alertNotifications: AppNotification[] = [];
 const _readIds = new Set<string>();
 const _deletedIds = new Set<string>();
+const ALERT_ROLES: NotifRole[] = ['admin', 'operator', 'manager'];
 
 function toSeverity(type: string | null): NotifSeverity {
   if (type === 'error') return 'error';
@@ -65,7 +66,7 @@ export function syncAlertNotifications(rows: ApiAlert[]): void {
         description: row.alertMessage || 'Có cảnh báo ngưỡng mới phát sinh.',
         timestamp: row.alertTime ? new Date(row.alertTime) : new Date(),
         read: _readIds.has(id) || readByStatus,
-        roles: ['admin', 'operator', 'manager'],
+        roles: ALERT_ROLES,
       };
     })
     .filter((n) => !_deletedIds.has(n.id));
