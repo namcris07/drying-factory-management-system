@@ -7,9 +7,8 @@ const ENV_KEYS = [
   'NEXT_PUBLIC_FEED_TEMPERATURE',
   'NEXT_PUBLIC_FEED_HUMIDITY',
   'NEXT_PUBLIC_FEED_LIGHT',
-  'NEXT_PUBLIC_FEED_FAN',
   'NEXT_PUBLIC_FEED_FAN_LEVEL',
-  'NEXT_PUBLIC_FEED_RELAY',
+  'NEXT_PUBLIC_FEED_LED',
   'NEXT_PUBLIC_FEED_LCD',
 ] as const;
 
@@ -60,9 +59,8 @@ describe('adafruitConfig', () => {
       temperature: 'BBC_TEMP',
       humidity: 'Humidity',
       light: 'Lux',
-      fan: 'fan_state',
       fanLevel: 'fan_level',
-      relay: 'BBC_LED',
+      led: 'BBC_LED',
       lcd: 'lcd_text',
     });
   });
@@ -72,9 +70,8 @@ describe('adafruitConfig', () => {
       NEXT_PUBLIC_FEED_TEMPERATURE: 'TEMP_OVERRIDE',
       NEXT_PUBLIC_FEED_HUMIDITY: 'HUM_OVERRIDE',
       NEXT_PUBLIC_FEED_LIGHT: 'LIGHT_OVERRIDE',
-      NEXT_PUBLIC_FEED_FAN: 'FAN_OVERRIDE',
       NEXT_PUBLIC_FEED_FAN_LEVEL: 'FAN_LEVEL_OVERRIDE',
-      NEXT_PUBLIC_FEED_RELAY: 'RELAY_OVERRIDE',
+      NEXT_PUBLIC_FEED_LED: 'LED_OVERRIDE',
       NEXT_PUBLIC_FEED_LCD: 'LCD_OVERRIDE',
     });
     const feeds = getMachineFeeds(' MAY-KY-TU-DAC-BIET/#01 ');
@@ -83,9 +80,8 @@ describe('adafruitConfig', () => {
       temperature: 'TEMP_OVERRIDE',
       humidity: 'HUM_OVERRIDE',
       light: 'LIGHT_OVERRIDE',
-      fan: 'FAN_OVERRIDE',
       fanLevel: 'FAN_LEVEL_OVERRIDE',
-      relay: 'RELAY_OVERRIDE',
+      led: 'LED_OVERRIDE',
       lcd: 'LCD_OVERRIDE',
     });
   });
@@ -100,9 +96,8 @@ describe('adafruitConfig', () => {
       temperature: 'drytech.m-a1-temperature',
       humidity: 'drytech.m-a1-humidity',
       light: 'drytech.m-a1-light',
-      fan: 'drytech.m-a1-fan',
       fanLevel: 'drytech.m-a1-fan-level',
-      relay: 'drytech.m-a1-relay',
+      led: 'drytech.m-a1-led',
       lcd: 'drytech.m-a1-lcd',
     });
   });
@@ -133,7 +128,7 @@ describe('adafruitConfig', () => {
       tempWarn: 82,
       humMin: 8,
       humMax: 85,
-      lightDoor: 700,
+      lightDoor: 90,
     });
   });
 });

@@ -106,9 +106,7 @@ export default function OperatorHubPage() {
       `}</style>
 
       {/* ── Operating Mode Control ── */}
-      <div style={{ marginBottom: 24 }}>
-        <OperatingModeToggle />
-      </div>
+
 
       {/* ── Page Header ── */}
       <div style={{ marginBottom: 24 }}>
@@ -129,6 +127,9 @@ export default function OperatorHubPage() {
             <Tag style={{ borderRadius: 20, padding: '4px 14px', fontSize: 13, background: '#fafafa', borderColor: '#d9d9d9' }}>
               <PauseCircleOutlined /> Chờ: <strong>{counts.idle}</strong>
             </Tag>
+                <div style={{ marginBottom: 5 }}>
+        <OperatingModeToggle />
+                </div>
             {counts.error > 0 && (
               <Tag color="error" style={{ borderRadius: 20, padding: '4px 14px', fontSize: 13 }}>
                 <WarningOutlined /> Lỗi: <strong>{counts.error}</strong>

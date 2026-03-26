@@ -51,7 +51,7 @@ DATABASE_URL=postgresql://postgres:yourpassword@localhost:5432/dadn_db
 ADAFRUIT_IO_USERNAME=your_adafruit_username
 ADAFRUIT_IO_KEY=your_adafruit_aio_key
 ADAFRUIT_IO_BROKER_URL=mqtt://io.adafruit.com:1883
-ADAFRUIT_IO_SUBSCRIBE_FEEDS=temperature,humidity,light,fan_state,fan_level,relay_state,led_state,lcd_text,device_status
+ADAFRUIT_IO_SUBSCRIBE_FEEDS=temperature,humidity,light,fan_level,BBC_LED,lcd_text,device_status
 
 # Khuyến nghị thêm (được code hỗ trợ fallback)
 FRONTEND_URL=http://localhost:3001

@@ -7,28 +7,13 @@ interface OperatingModeToggleProps {
   onModeChange?: (mode: 'auto' | 'manual') => void;
 }
 
-/**
- * Operating Mode Toggle Component
- *
- * Displays current operating mode (Auto/Manual) and allows users to switch.
- * - AUTO (Green): System controls devices based on sensor thresholds
- * - MANUAL (Yellow): User has direct device control
- *
- * Features:
- * - Real-time sync: Polls backend every 5 seconds for mode changes
- * - If another user changes mode, this component auto-updates
- * - Visual Feedback:
- *   - Green light when Auto mode
- *   - Yellow light when Manual mode
- *   - Disabled state when syncing
- */
 export function OperatingModeToggle({
   onModeChange,
 }: OperatingModeToggleProps) {
   const [mode, setMode] = useState<'auto' | 'manual'>('auto');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
+  const [, setLastSyncTime] = useState<Date | null>(null);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Load current mode on mount
@@ -40,6 +25,7 @@ export function OperatingModeToggle({
           | 'auto'
           | 'manual';
         setMode(currentMode);
+        onModeChange?.(currentMode);
         setLastSyncTime(new Date());
         setError(null);
       } catch (err) {
@@ -49,7 +35,7 @@ export function OperatingModeToggle({
     };
 
     loadMode();
-  }, []);
+  }, [onModeChange]);
 
   // Poll for mode changes every 5 seconds
   // This allows real-time sync when another user changes the mode
@@ -125,12 +111,6 @@ export function OperatingModeToggle({
     <div className="flex flex-col gap-3 p-4 rounded-lg border border-gray-200 bg-white">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <label className="text-sm font-semibold text-gray-700">
-            Chế độ vận hành
-          </label>
-        </div>
-
         {/* Status Indicator Light */}
         <div className="flex items-center gap-2">
           <div
@@ -142,16 +122,6 @@ export function OperatingModeToggle({
             {isAuto ? 'Tự động' : 'Thủ công'}
           </span>
         </div>
-      </div>
-
-      {/* Toggle Switch */}
-      <div className="flex items-center justify-between">
-        <div className="text-xs text-gray-500">
-          {isAuto
-            ? 'Hệ thống tự động điều khiển thiết bị'
-            : 'Bạn có thể điều khiển thiết bị thủ công'}
-        </div>
-
         <Switch
           checked={!isAuto}
           onCheckedChange={(checked) => {
@@ -161,36 +131,15 @@ export function OperatingModeToggle({
           className="ml-2"
         />
       </div>
-
-      {/* Descriptions */}
-      <div className="text-xs text-gray-600 mt-2">
-        <div className="mb-1">
-          <strong>Tự động (Auto):</strong> Hệ thống monitors sensor data và tự
-          động điều khiển thiết bị
-        </div>
-        <div>
-          <strong>Thủ công (Manual):</strong> Bạn tự kiểm soát tất cả thiết bị
-          thông qua nút bấm
-        </div>
-      </div>
-
       {/* Error Message */}
       {error && (
         <div className="text-xs text-red-600 mt-2 p-2 bg-red-50 rounded">
           {error}
         </div>
       )}
-
       {/* Loading State */}
       {isLoading && (
         <div className="text-xs text-blue-600 mt-2">Đang cập nhật...</div>
-      )}
-
-      {/* Sync Info */}
-      {lastSyncTime && (
-        <div className="text-xs text-gray-400 mt-2">
-          Cập nhật lần cuối: {lastSyncTime.toLocaleTimeString('vi-VN')}
-        </div>
       )}
     </div>
   );

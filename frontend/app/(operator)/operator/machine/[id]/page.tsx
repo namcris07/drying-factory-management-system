@@ -31,7 +31,6 @@ import {
   PlayCircleOutlined,
   ReloadOutlined,
   SendOutlined,
-  StopOutlined,
   ThunderboltOutlined,
   ToolOutlined,
   WarningOutlined,
@@ -50,11 +49,20 @@ import { useOperatorContext } from '@/features/operator/model/operator-context';
 import { AIO_THRESHOLDS } from '@/features/operator/adafruit/config/adafruit-config';
 import { getMachineFeeds } from '@/features/operator/adafruit/config/adafruit-config';
 import { useAdafruitIO } from '@/features/operator/adafruit/model/use-adafruit-io';
+import { OperatingModeToggle } from '@/features/operator/dashboard/ui/OperatingModeToggle';
+import { batchesApi, systemConfigApi } from '@/shared/lib/api';
 
-const { Title, Text, Paragraph } = Typography;
+const { Title, Text } = Typography;
 const { TextArea } = Input;
 const DOOR_OPEN_LUX = AIO_THRESHOLDS.lightDoor;
 const HEAT_LOSS_DELAY_MS = 20_000;
+
+function inferDeviceId(machineCode: string): number | null {
+  const m = machineCode.match(/(\d+)$/);
+  if (!m) return null;
+  const num = Number(m[1]);
+  return Number.isInteger(num) && num > 0 ? num : null;
+}
 
 type StatusKey = 'Running' | 'Idle' | 'Error' | 'Maintenance';
 
@@ -64,6 +72,40 @@ const statusCfg: Record<StatusKey, { text: string; tagColor: 'success' | 'defaul
   Error: { text: ' lỗi', tagColor: 'error' },
   Maintenance: { text: 'Bảo trì', tagColor: 'warning' },
 };
+
+function LcdDisplay({ message }: { message: string }) {
+  const lines = (message || ' ')
+    .padEnd(32, ' ')
+    .match(/.{1,16}/g) || ['                '];
+
+  return (
+    <div
+      style={{
+        background: '#1a2a1a',
+        borderRadius: 6,
+        padding: '10px 14px',
+        border: '2px solid #3d5c3d',
+        fontFamily: '"Courier New", Courier, monospace',
+        boxShadow: 'inset 0 2px 8px rgba(0,0,0,0.6)',
+      }}
+    >
+      {lines.slice(0, 2).map((line, i) => (
+        <div
+          key={i}
+          style={{
+            color: '#7cfc00',
+            fontSize: 14,
+            letterSpacing: 2,
+            lineHeight: '22px',
+            minHeight: 22,
+          }}
+        >
+          {line}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default function OperatorMachineDetailPage() {
   const router = useRouter();
@@ -75,6 +117,13 @@ export default function OperatorMachineDetailPage() {
   const [nowSnapshot, setNowSnapshot] = useState<number>(() => Date.now());
   const [selectedRecipeId, setSelectedRecipeId] = useState<number | null>(null);
   const [heatLossDetected, setHeatLossDetected] = useState(false);
+  const [operatingMode, setOperatingMode] = useState<'auto' | 'manual'>('auto');
+  const [manualTempSetpoint, setManualTempSetpoint] = useState(60);
+  const [manualHumiditySetpoint, setManualHumiditySetpoint] = useState(45);
+  const [savingSetpoint, setSavingSetpoint] = useState(false);
+  const [activeBatchId, setActiveBatchId] = useState<number | null>(null);
+  const [fanLevelDraft, setFanLevelDraft] = useState(0);
+  const [isAdjustingFan, setIsAdjustingFan] = useState(false);
   const doorOpenSinceRef = useRef<number | null>(null);
   const heatLossNotifiedRef = useRef(false);
 
@@ -95,9 +144,8 @@ export default function OperatorMachineDetailPage() {
     connected,
     errorMsg,
     lastUpdated,
-    setFan,
     setFanLevel,
-    setRelay,
+    setLed,
     sendLcd,
     refresh,
   } = useAdafruitIO(feeds);
@@ -159,6 +207,28 @@ export default function OperatorMachineDetailPage() {
   }, [activeRecipe?.duration, elapsedMsSnapshot, machine?.progress, machine?.startTime]);
 
   const doorOpenByLux = sensor.light > DOOR_OPEN_LUX;
+  const isManualMode = operatingMode === 'manual';
+
+  const recipeTempSetpoint = selectedRecipe?.temp ?? activeRecipe?.temp ?? null;
+  const recipeHumiditySetpoint =
+    selectedRecipe?.humidity ?? activeRecipe?.humidity ?? null;
+  const formulaTempExceeded =
+    !isManualMode &&
+    recipeTempSetpoint !== null &&
+    Number.isFinite(sensor.temperature) &&
+    sensor.temperature > recipeTempSetpoint;
+
+  const visibleTempSetpoint = isManualMode
+    ? manualTempSetpoint
+    : (recipeTempSetpoint ?? manualTempSetpoint);
+  const visibleHumiditySetpoint = isManualMode
+    ? manualHumiditySetpoint
+    : (recipeHumiditySetpoint ?? manualHumiditySetpoint);
+
+  useEffect(() => {
+    if (isAdjustingFan) return;
+    setFanLevelDraft(output.fanLevel);
+  }, [isAdjustingFan, output.fanLevel]);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -166,6 +236,58 @@ export default function OperatorMachineDetailPage() {
     }, 30000);
     return () => clearInterval(id);
   }, []);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const loadModeAndSetpoints = async () => {
+      try {
+        const cfg = await systemConfigApi.getAll();
+        if (!mounted) return;
+
+        const mode = (cfg.operatingMode ?? 'auto') as 'auto' | 'manual';
+        setOperatingMode(mode);
+
+        const temp = Number(cfg.manualTargetTemp);
+        const humidity = Number(cfg.manualTargetHumidity);
+
+        if (Number.isFinite(temp)) {
+          setManualTempSetpoint(Math.max(30, Math.min(95, temp)));
+        }
+        if (Number.isFinite(humidity)) {
+          setManualHumiditySetpoint(Math.max(5, Math.min(90, humidity)));
+        }
+      } catch {
+        // Keep local defaults if config endpoint is temporarily unavailable.
+      }
+    };
+
+    void loadModeAndSetpoints();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const persistManualSetpoint = async (next: {
+    manualTargetTemp: number;
+    manualTargetHumidity: number;
+  }) => {
+    if (!isManualMode) return;
+
+    setSavingSetpoint(true);
+    try {
+      await systemConfigApi.saveAll({
+        manualTargetTemp: String(next.manualTargetTemp),
+        manualTargetHumidity: String(next.manualTargetHumidity),
+      });
+      message.success('Da luu setpoint thu cong.');
+    } catch {
+      message.warning('Khong luu duoc setpoint thu cong len he thong.');
+    } finally {
+      setSavingSetpoint(false);
+    }
+  };
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -235,8 +357,12 @@ export default function OperatorMachineDetailPage() {
     }
 
     try {
-      await Promise.all([setFan(true), setRelay(true)]);
-      await setFanLevel(Math.max(1, output.fanLevel || 3));
+      const createdBatch = await batchesApi.create({
+        recipeID: selectedRecipe.id,
+        deviceID: inferDeviceId(machineId) ?? undefined,
+        operationMode: operatingMode,
+      });
+      setActiveBatchId(createdBatch.batchesID);
 
       const now = new Date();
       const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
@@ -264,7 +390,14 @@ export default function OperatorMachineDetailPage() {
 
   const handleStopBatch = async () => {
     try {
-      await Promise.all([setFan(false), setRelay(false)]);
+      if (activeBatchId) {
+        await batchesApi.update(activeBatchId, {
+          batchStatus: 'Stopped',
+          batchResult: 'StoppedByOperator',
+        });
+        setActiveBatchId(null);
+      }
+
       setMachines((prev) =>
         prev.map((item) =>
           item.id === machineId
@@ -285,17 +418,20 @@ export default function OperatorMachineDetailPage() {
     }
   };
 
-  const handleFanToggle = async (on: boolean) => {
-    await setFan(on);
-    message.info(`Quat -> ${on ? 'BAT' : 'TAT'}`);
-  };
-
-  const handleRelayToggle = async (on: boolean) => {
-    await setRelay(on);
-    message.info(`Relay -> ${on ? 'DONG' : 'NGAT'}`);
+  const handleLedToggle = async (on: boolean) => {
+    if (!isManualMode) {
+      message.warning('Che do Auto: khong the dieu khien LED thu cong.');
+      return;
+    }
+    await setLed(on);
+    message.info(`LED -> ${on ? 'BAT' : 'TAT'}`);
   };
 
   const handleSendLcd = async () => {
+    if (!isManualMode) {
+      message.warning('Chi gui tin nhan LCD tuy chinh trong che do Manual.');
+      return;
+    }
     if (!lcdInput.trim()) {
       message.warning('Vui long nhap noi dung LCD.');
       return;
@@ -355,7 +491,7 @@ export default function OperatorMachineDetailPage() {
               {machine.startTime && (
                 <Text type="secondary" style={{ fontSize: 13 }}>
                   <ClockCircleOutlined style={{ marginRight: 4 }} />
-                  Bat dau {machine.startTime} · Da chay {elapsed}
+                  Bắt đầu {machine.startTime} · Đã chạy {elapsed}
                 </Text>
               )}
               {activeRecipe && (
@@ -371,8 +507,13 @@ export default function OperatorMachineDetailPage() {
               )}
             </Space>
           </div>
+          <div style={{ marginBottom: 16, maxWidth: 520 }}>
+        <OperatingModeToggle onModeChange={setOperatingMode} />
+      </div>
         </div>
       </div>
+
+      
 
       {errorMsg && (
         <Alert
@@ -381,6 +522,16 @@ export default function OperatorMachineDetailPage() {
           showIcon
           message="Canh bao ket noi"
           description={errorMsg}
+        />
+      )}
+
+      {formulaTempExceeded && (
+        <Alert
+          style={{ marginBottom: 16, borderRadius: 12 }}
+          type="warning"
+          showIcon
+          message="Nhiet do dang vuot nguong cong thuc"
+          description={`Hien tai ${sensor.temperature.toFixed(1)}°C > setpoint cong thuc ${Math.round(recipeTempSetpoint as number)}°C. He thong se canh bao, quat chi bat theo logic auto hysteresis.`}
         />
       )}
 
@@ -406,7 +557,7 @@ export default function OperatorMachineDetailPage() {
             style={{ borderRadius: 14, marginBottom: 18 }}
             title={
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontWeight: 600 }}>Diễn biến nhiệt độ & độ ẩm - 30 mẫu gần nhất</span>
+                <span style={{ fontWeight: 600 }}>Diễn biến nhiệt độ & độ ẩm</span>
                 {isRunning && (
                   <Badge status="processing" text={<Text style={{ fontSize: 12 }}>Đang cập nhật</Text>} />
                 )}
@@ -545,7 +696,7 @@ export default function OperatorMachineDetailPage() {
                 styles={{ body: { padding: '20px 16px' } }}
               >
                 <div style={{ fontSize: 42, marginBottom: 8, lineHeight: 1 }}>⏱</div>
-                <Text strong style={{ display: 'block', marginBottom: 6 }}>Thoi gian chay</Text>
+                <Text strong style={{ display: 'block', marginBottom: 6 }}>Thời gian chạy</Text>
                 <Text style={{ fontSize: 20, fontWeight: 700, color: isRunning ? '#1677ff' : '#8c8c8c' }}>
                   {isRunning ? elapsed : '--'}
                 </Text>
@@ -664,7 +815,6 @@ export default function OperatorMachineDetailPage() {
                 danger
                 block
                 size="large"
-                icon={<StopOutlined />}
                 onClick={() => void handleStopBatch()}
                 style={{
                   height: 54,
@@ -680,6 +830,75 @@ export default function OperatorMachineDetailPage() {
 
             <div style={{ marginBottom: 16 }}>
               <Text strong style={{ display: 'block', marginBottom: 8, fontSize: 14 }}>
+                Setpoint nhiệt độ & độ ẩm
+              </Text>
+              <Card size="small" style={{ borderRadius: 10, marginBottom: 10 }} styles={{ body: { padding: 12 } }}>
+                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                  <div>
+                    <Text type="secondary">Nhiệt độ mục tiêu</Text>
+                    <Slider
+                      min={30}
+                      max={95}
+                      step={1}
+                      value={visibleTempSetpoint}
+                      disabled={!isManualMode}
+                      onChange={(value) => {
+                        if (typeof value === 'number') {
+                          setManualTempSetpoint(value);
+                        }
+                      }}
+                      onChangeComplete={(value) => {
+                        if (typeof value === 'number') {
+                          void persistManualSetpoint({
+                            manualTargetTemp: value,
+                            manualTargetHumidity: manualHumiditySetpoint,
+                          });
+                        }
+                      }}
+                    />
+                    <Text style={{ fontSize: 12 }}>
+                      {Math.round(visibleTempSetpoint)}°C
+                      {!isManualMode && recipeTempSetpoint !== null
+                        ? ` (từ công thức ${Math.round(recipeTempSetpoint)}°C)`
+                        : ''}
+                    </Text>
+                  </div>
+
+                  <div>
+                    <Text type="secondary">Độ ẩm mục tiêu</Text>
+                    <Slider
+                      min={5}
+                      max={90}
+                      step={1}
+                      value={visibleHumiditySetpoint}
+                      disabled={!isManualMode}
+                      onChange={(value) => {
+                        if (typeof value === 'number') {
+                          setManualHumiditySetpoint(value);
+                        }
+                      }}
+                      onChangeComplete={(value) => {
+                        if (typeof value === 'number') {
+                          void persistManualSetpoint({
+                            manualTargetTemp: manualTempSetpoint,
+                            manualTargetHumidity: value,
+                          });
+                        }
+                      }}
+                    />
+                    <Text style={{ fontSize: 12 }}>
+                      {Math.round(visibleHumiditySetpoint)}%
+                      {!isManualMode && recipeHumiditySetpoint !== null
+                        ? ` (từ công thức ${Math.round(recipeHumiditySetpoint)}%)`
+                        : ''}
+                    </Text>
+                  </div>
+
+                  {savingSetpoint && <Text type="secondary">Đang lưu setpoint...</Text>}
+                </Space>
+              </Card>
+
+              <Text strong style={{ display: 'block', marginBottom: 8, fontSize: 14 }}>
                 Điều khiển thiết bị
               </Text>
               <Row gutter={[10, 10]}>
@@ -687,10 +906,13 @@ export default function OperatorMachineDetailPage() {
                   <Card size="small" style={{ borderRadius: 10 }} styles={{ body: { padding: 12 } }}>
                     <Space direction="vertical" size={6} style={{ width: '100%' }}>
                       <Text strong>
-                        <ThunderboltOutlined /> Quạt
+                        LED
                       </Text>
-                      <Switch checked={output.fanOn} onChange={(checked) => void handleFanToggle(checked)} />
-                      <Text type="secondary">Level: {output.fanLevel}</Text>
+                      <Switch
+                        checked={output.ledOn}
+                        disabled={!isManualMode}
+                        onChange={(checked) => void handleLedToggle(checked)}
+                      />
                     </Space>
                   </Card>
                 </Col>
@@ -698,10 +920,11 @@ export default function OperatorMachineDetailPage() {
                   <Card size="small" style={{ borderRadius: 10 }} styles={{ body: { padding: 12 } }}>
                     <Space direction="vertical" size={6} style={{ width: '100%' }}>
                       <Text strong>
-                        <PlayCircleOutlined /> Relay
+                        Quạt
                       </Text>
-                      <Switch checked={output.relayOn} onChange={(checked) => void handleRelayToggle(checked)} />
-                      <Text type="secondary">Trạng thái chạy</Text>
+                      <Tag color={output.fanOn ? 'success' : 'default'}>
+                        {output.fanOn ? 'Đang chạy' : 'Đang tắt'}
+                      </Tag>
                     </Space>
                   </Card>
                 </Col>
@@ -710,11 +933,25 @@ export default function OperatorMachineDetailPage() {
                     <Text strong style={{ display: 'block', marginBottom: 8 }}>Tốc độ quạt</Text>
                     <Slider
                       min={0}
-                      max={5}
+                      max={100}
                       step={1}
-                      value={output.fanLevel}
-                      onChange={(value) => void setFanLevel(value)}
+                      value={fanLevelDraft}
+                      disabled={!isManualMode}
+                      onChange={(value) => {
+                        if (!isManualMode) return;
+                        if (typeof value !== 'number') return;
+                        setIsAdjustingFan(true);
+                        setFanLevelDraft(value);
+                      }}
+                      onChangeComplete={(value) => {
+                        if (!isManualMode) return;
+                        if (typeof value !== 'number') return;
+                        void setFanLevel(value).finally(() => {
+                          setIsAdjustingFan(false);
+                        });
+                      }}
                     />
+                    <Text type="secondary">Mức hiện tại: {fanLevelDraft}%</Text>
                   </Card>
                 </Col>
               </Row>
@@ -722,29 +959,35 @@ export default function OperatorMachineDetailPage() {
 
             <div style={{ marginBottom: 10 }}>
               <Text strong style={{ display: 'block', marginBottom: 8 }}>LCD Message</Text>
-              <TextArea
-                rows={3}
-                placeholder="Nhập tối đa 32 ký tự..."
-                value={lcdInput}
-                onChange={(e) => setLcdInput(e.target.value)}
-                maxLength={64}
-                style={{ borderRadius: 8, marginBottom: 8 }}
-              />
-              <Button
-                block
-                type="primary"
-                icon={<SendOutlined />}
-                onClick={() => void handleSendLcd()}
-                loading={sendingLcd}
-                style={{ borderRadius: 10, height: 42, fontWeight: 600 }}
-              >
-                Gui LCD
-              </Button>
-              {output.lcdMessage && (
-                <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
-                  Noi dung hien tai: <Text code>{output.lcdMessage}</Text>
-                </Paragraph>
-              )}
+              <div style={{ padding: '14px 16px', background: '#0a1628', borderRadius: 10, border: '1px solid #1a2a3a', marginBottom: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+                  <Text strong style={{ fontSize: 13, color: '#fff' }}>LCD I2C</Text>
+                  <Tag color="geekblue" style={{ borderRadius: 10, fontSize: 10, marginLeft: 'auto' }}>OUTPUT</Tag>
+                </div>
+                <LcdDisplay message={output.lcdMessage} />
+              </div>
+              {isManualMode ? (
+                <>
+                  <TextArea
+                    rows={3}
+                    placeholder="Nhập tối đa 32 ký tự..."
+                    value={lcdInput}
+                    onChange={(e) => setLcdInput(e.target.value)}
+                    maxLength={64}
+                    style={{ borderRadius: 8, marginBottom: 8 }}
+                  />
+                  <Button
+                    block
+                    type="primary"
+                    icon={<SendOutlined />}
+                    onClick={() => void handleSendLcd()}
+                    loading={sendingLcd}
+                    style={{ borderRadius: 10, height: 42, fontWeight: 600 }}
+                  >
+                    Gửi LCD
+                  </Button>
+                </>
+              ) : ""}
             </div>
 
             {isMaintenance && (
@@ -784,23 +1027,8 @@ export default function OperatorMachineDetailPage() {
           style={{ marginTop: 16, borderRadius: 10 }}
           type="error"
           showIcon
-          message="ảnh báo thất thoát nhiệt"
+          message="Cảnh báo thất thoát nhiệt"
           description={`Lux hiện tại (${sensor.light}) vượt ngưỡng mở cửa (${DOOR_OPEN_LUX}) quá ${HEAT_LOSS_DELAY_MS / 1000} giây khi máy đang chạy.`}
-        />
-      )}
-
-      {isIdle && (
-        <Alert
-          style={{ marginTop: 16, borderRadius: 10 }}
-          type="info"
-          showIcon
-          message="Máy đang chờ"
-          description="Bật Quạt/Relay từ bảng điều khiển bên phải để đưa máy vào trạng thái chạy theo logic hiện tại."
-          action={
-            <Button size="small" icon={<CheckCircleOutlined />}>
-              Đã nhận
-            </Button>
-          }
         />
       )}
     </div>

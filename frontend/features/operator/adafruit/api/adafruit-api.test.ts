@@ -62,7 +62,7 @@ describe('adafruit-api', () => {
       id: '2',
       value: '1',
       feed_id: 11,
-      feed_key: 'fan_state',
+      feed_key: 'fan_level',
       created_at: new Date().toISOString(),
       lat: null,
       lon: null,
@@ -74,11 +74,11 @@ describe('adafruit-api', () => {
       json: async () => payload,
     } as Response);
 
-    const result = await publishFeedValue('fan_state', 1);
+    const result = await publishFeedValue('fan_level', 1);
 
     expect(result).toEqual(payload);
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining('/feeds/fan_state/data'),
+      expect.stringContaining('/feeds/fan_level/data'),
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({ value: '1' }),
@@ -92,6 +92,6 @@ describe('adafruit-api', () => {
       status: 429,
     } as Response);
 
-    await expect(publishFeedValue('fan_state', 'ON')).rejects.toThrow('[AIO] POST failed');
+    await expect(publishFeedValue('fan_level', 0)).rejects.toThrow('[AIO] POST failed');
   });
 });

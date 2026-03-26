@@ -10,6 +10,11 @@ import { MqttClient, connect } from 'mqtt';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ModeControlService } from './mode-control.service';
+import {
+  buildLcdSnapshot,
+  resolveFormulaThreshold,
+  type FormulaThresholdConfig,
+} from './mqtt-logic.util';
 
 type FeedState = {
   feed: string;
@@ -25,6 +30,9 @@ type ThresholdConfig = {
   maxTempSafe: number;
   minHumidity: number;
   maxHumidity: number;
+  tempHysteresisDelta: number;
+  humidityHysteresisDelta: number;
+  autoFanLevelOn: number;
   autoStopEnabled: boolean;
   alertDelaySeconds: number;
   lightSensorThreshold: number;
@@ -35,6 +43,9 @@ const DEFAULT_THRESHOLDS: ThresholdConfig = {
   maxTempSafe: 90,
   minHumidity: 8,
   maxHumidity: 85,
+  tempHysteresisDelta: 5,
+  humidityHysteresisDelta: 5,
+  autoFanLevelOn: 50,
   autoStopEnabled: true,
   alertDelaySeconds: 15,
   lightSensorThreshold: 500,
@@ -60,7 +71,12 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
   private readonly aioKey: string;
   private readonly modeFeedKey: string;
   private readonly lcdFeedKey: string;
+  private readonly fanLevelFeedKey: string;
+  private readonly ledFeedKey: string;
   private lcdAutoPushTimer: NodeJS.Timeout | null = null;
+  private lastOperatorLcdMessage = '';
+  private publishingAutoLcd = false;
+  private readonly tempHysteresisFanState = new Map<string, boolean>();
 
   constructor(
     private readonly configService: ConfigService,
@@ -80,6 +96,14 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     this.lcdFeedKey = this.configService.get<string>(
       'ADAFRUIT_IO_LCD_FEED',
       'lcd_text',
+    );
+    this.fanLevelFeedKey = this.configService.get<string>(
+      'ADAFRUIT_IO_FAN_LEVEL_FEED',
+      'fan_level',
+    );
+    this.ledFeedKey = this.configService.get<string>(
+      'ADAFRUIT_IO_LED_FEED',
+      'BBC_LED',
     );
   }
 
@@ -191,6 +215,17 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
 
     const topic = this.toTopic(feed);
     const payload = this.toPayload(value);
+    const isLcdFeed =
+      this.normalizeFeedKey(feed) === this.normalizeFeedKey(this.lcdFeedKey);
+
+    if (
+      isLcdFeed &&
+      !this.publishingAutoLcd &&
+      typeof value === 'string' &&
+      value.trim()
+    ) {
+      this.lastOperatorLcdMessage = value.trim();
+    }
 
     if (!this.client || !this.isConnected) {
       if (optimisticSync) {
@@ -300,10 +335,8 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       'temperature',
       'humidity',
       'light',
-      'fan_state',
-      'fan_level',
-      'relay_state',
-      'led_state',
+      this.fanLevelFeedKey,
+      this.ledFeedKey,
       this.lcdFeedKey,
       'device_status',
       this.modeFeedKey,
@@ -326,14 +359,13 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Check if a feed is a device control command feed (not a sensor data feed)
-   * Device control feeds: fan_state, fan_level, relay_state, led_state, etc.
+   * Device control feeds: fan_level, BBC_LED, led_state, etc.
    * Sensor feeds: temperature, humidity, light, device_status
    */
   private isDeviceControlFeed(feed: string): boolean {
     const controlFeeds = [
-      'fan_state',
       'fan_level',
-      'relay_state',
+      'bbc_led',
       'led_state',
       'heater_state',
       'humidifier_state',
@@ -485,6 +517,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     const device = await this.resolveDeviceByFeed(feed);
     const deviceId = device?.deviceID ?? null;
     const deviceName = device?.deviceName || 'Thiết bị sấy';
+    const formulaThreshold = await this.getFormulaThresholdConfig(deviceId);
 
     if (metric === 'temperature') {
       await this.handleMetricAlert({
@@ -495,10 +528,49 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
         alertType: 'error',
         alertMessage: `${deviceName}: Nhiệt độ vượt ngưỡng an toàn (${thresholds.maxTempSafe}°C).`,
       });
+
+      await this.handleMetricAlert({
+        conditionKey: `temp_formula_high:${deviceId ?? 'global'}`,
+        active:
+          Number.isFinite(formulaThreshold.maxTemperature) &&
+          numericValue >=
+            (formulaThreshold.maxTemperature as number) +
+              Math.max(0, thresholds.tempHysteresisDelta),
+        delaySeconds: thresholds.alertDelaySeconds,
+        deviceId,
+        alertType: 'warning',
+        alertMessage: this.buildFormulaTemperatureAlertMessage(
+          deviceName,
+          formulaThreshold,
+        ),
+      });
+
+      if (numericValue > thresholds.maxTempSafe) {
+        await this.autoStopBatchWhenSystemThresholdExceeded({
+          deviceId,
+          deviceName,
+          currentTemperature: numericValue,
+          maxTempSafe: thresholds.maxTempSafe,
+          autoStopEnabled: thresholds.autoStopEnabled,
+          sourceFeed: feed,
+        });
+      }
+
+      await this.applyAutoHysteresisFanControl({
+        metric,
+        sourceFeed: feed,
+        deviceId,
+        deviceName,
+        currentValue: numericValue,
+        formulaThreshold,
+        thresholds,
+      });
       return;
     }
 
     if (metric === 'humidity') {
+      const formulaHumidityMax = formulaThreshold.maxHumidity;
+
       await this.handleMetricAlert({
         conditionKey: `hum_low:${deviceId ?? 'global'}`,
         active: numericValue < thresholds.minHumidity,
@@ -515,6 +587,32 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
         deviceId,
         alertType: 'warning',
         alertMessage: `${deviceName}: Độ ẩm vượt ngưỡng tối đa (${thresholds.maxHumidity}%).`,
+      });
+
+      await this.handleMetricAlert({
+        conditionKey: `hum_formula_high:${deviceId ?? 'global'}`,
+        active:
+          Number.isFinite(formulaHumidityMax) &&
+          numericValue >=
+            (formulaHumidityMax as number) +
+              Math.max(0, thresholds.humidityHysteresisDelta),
+        delaySeconds: thresholds.alertDelaySeconds,
+        deviceId,
+        alertType: 'warning',
+        alertMessage: this.buildFormulaHumidityAlertMessage(
+          deviceName,
+          formulaThreshold,
+        ),
+      });
+
+      await this.applyAutoHysteresisFanControl({
+        metric,
+        sourceFeed: feed,
+        deviceId,
+        deviceName,
+        currentValue: numericValue,
+        formulaThreshold,
+        thresholds,
       });
       return;
     }
@@ -600,6 +698,9 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       'maxTempSafe',
       'minHumidity',
       'maxHumidity',
+      'tempHysteresisDelta',
+      'humidityHysteresisDelta',
+      'autoFanLevelOn',
       'autoStopEnabled',
       'alertDelaySeconds',
       'lightSensorThreshold',
@@ -614,30 +715,51 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       rows.map((row) => [row.configKey, row.configValue ?? '']),
     );
 
+    const asNumber = (key: string, fallback: number): number => {
+      const raw = byKey.get(key);
+      const parsed = Number(raw);
+      return Number.isFinite(parsed) ? parsed : fallback;
+    };
+
+    const autoFanLevelOn = Math.max(
+      1,
+      Math.min(
+        100,
+        Math.round(
+          asNumber('autoFanLevelOn', DEFAULT_THRESHOLDS.autoFanLevelOn),
+        ),
+      ),
+    );
+
     return {
-      maxTempSafe: Number(
-        byKey.get('maxTempSafe') ?? DEFAULT_THRESHOLDS.maxTempSafe,
+      maxTempSafe: asNumber('maxTempSafe', DEFAULT_THRESHOLDS.maxTempSafe),
+      minHumidity: asNumber('minHumidity', DEFAULT_THRESHOLDS.minHumidity),
+      maxHumidity: asNumber('maxHumidity', DEFAULT_THRESHOLDS.maxHumidity),
+      tempHysteresisDelta: asNumber(
+        'tempHysteresisDelta',
+        DEFAULT_THRESHOLDS.tempHysteresisDelta,
       ),
-      minHumidity: Number(
-        byKey.get('minHumidity') ?? DEFAULT_THRESHOLDS.minHumidity,
+      humidityHysteresisDelta: asNumber(
+        'humidityHysteresisDelta',
+        DEFAULT_THRESHOLDS.humidityHysteresisDelta,
       ),
-      maxHumidity: Number(
-        byKey.get('maxHumidity') ?? DEFAULT_THRESHOLDS.maxHumidity,
-      ),
+      autoFanLevelOn,
       autoStopEnabled:
         String(
           byKey.get('autoStopEnabled') ??
             String(DEFAULT_THRESHOLDS.autoStopEnabled),
         ) === 'true',
-      alertDelaySeconds: Number(
-        byKey.get('alertDelaySeconds') ?? DEFAULT_THRESHOLDS.alertDelaySeconds,
+      alertDelaySeconds: asNumber(
+        'alertDelaySeconds',
+        DEFAULT_THRESHOLDS.alertDelaySeconds,
       ),
-      lightSensorThreshold: Number(
-        byKey.get('lightSensorThreshold') ??
-          DEFAULT_THRESHOLDS.lightSensorThreshold,
+      lightSensorThreshold: asNumber(
+        'lightSensorThreshold',
+        DEFAULT_THRESHOLDS.lightSensorThreshold,
       ),
-      doorOpenTimeout: Number(
-        byKey.get('doorOpenTimeout') ?? DEFAULT_THRESHOLDS.doorOpenTimeout,
+      doorOpenTimeout: asNumber(
+        'doorOpenTimeout',
+        DEFAULT_THRESHOLDS.doorOpenTimeout,
       ),
     };
   }
@@ -667,6 +789,310 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       },
       orderBy: { deviceID: 'asc' },
     });
+  }
+
+  private async getFormulaThresholdConfig(
+    deviceId: number | null,
+  ): Promise<FormulaThresholdConfig> {
+    const queryActiveBatch = (targetDeviceId: number | null) =>
+      this.prisma.batch.findFirst({
+        where: {
+          ...(targetDeviceId ? { deviceID: targetDeviceId } : {}),
+          batchStatus: {
+            in: ['Running', 'InProgress', 'Active', 'Processing'],
+          },
+        },
+        select: {
+          currentStep: true,
+          recipe: {
+            select: {
+              recipeName: true,
+              recipeFruits: true,
+              steps: {
+                select: {
+                  stepNo: true,
+                  temperatureGoal: true,
+                  humidityGoal: true,
+                },
+                orderBy: { stepNo: 'asc' },
+              },
+            },
+          },
+        },
+        orderBy: { batchesID: 'desc' },
+      });
+
+    // In shared-feed mode, metric feed may not map to the exact device.
+    // Fallback to the newest running batch globally to keep formula control active.
+    let activeBatch = await queryActiveBatch(deviceId);
+    if (!activeBatch && deviceId) {
+      activeBatch = await queryActiveBatch(null);
+    }
+
+    if (!activeBatch?.recipe) {
+      return {
+        maxTemperature: null,
+        maxHumidity: null,
+        recipeName: null,
+        fruitType: null,
+        source: 'none',
+      };
+    }
+
+    const stepNo = activeBatch.currentStep ?? 1;
+    const matchedStep =
+      activeBatch.recipe.steps.find((step) => step.stepNo === stepNo) ??
+      activeBatch.recipe.steps[0];
+
+    return resolveFormulaThreshold({
+      recipeName: activeBatch.recipe.recipeName,
+      recipeFruits: activeBatch.recipe.recipeFruits,
+      stepTemperatureGoal: matchedStep?.temperatureGoal,
+      stepHumidityGoal: matchedStep?.humidityGoal,
+    });
+  }
+
+  private resolveFanLevelFeedFromMetricFeed(metricFeed: string): string {
+    const lower = metricFeed.toLowerCase();
+
+    if (lower.includes('fan-level') || lower.includes('fan_level')) {
+      return metricFeed;
+    }
+
+    // Shared-feed mode should always use the configured output feed.
+    if (
+      lower.includes('bbc_temp') ||
+      lower === 'temperature' ||
+      lower === 'temp'
+    ) {
+      return this.fanLevelFeedKey;
+    }
+
+    // Per-machine topic pattern: drytech.<id>-temperature => drytech.<id>-fan-level
+    if (lower.startsWith('drytech.') && lower.includes('temperature')) {
+      return metricFeed.replace(/temperature/gi, 'fan-level');
+    }
+
+    if (lower.startsWith('drytech.') && lower.includes('temp')) {
+      return metricFeed.replace(/temp/gi, 'fan-level');
+    }
+
+    return this.fanLevelFeedKey;
+  }
+
+  private async publishServerControl(
+    feed: string,
+    value: number,
+  ): Promise<void> {
+    const topic = this.toTopic(feed);
+    await this.saveState(feed, topic, value, 'server-command');
+
+    await this.persistSensorLog({
+      direction: 'outgoing',
+      source: 'server-command',
+      topic,
+      feed,
+      value,
+      raw: String(value),
+    });
+
+    if (!this.client || !this.isConnected) return;
+
+    await new Promise<void>((resolve, reject) => {
+      this.client?.publish(
+        topic,
+        String(value),
+        { qos: 0, retain: false },
+        (err) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+          resolve();
+        },
+      );
+    });
+  }
+
+  private async applyAutoHysteresisFanControl(params: {
+    metric: 'temperature' | 'humidity';
+    sourceFeed: string;
+    deviceId: number | null;
+    deviceName: string;
+    currentValue: number;
+    formulaThreshold: FormulaThresholdConfig;
+    thresholds: ThresholdConfig;
+  }): Promise<void> {
+    const mode = await this.modeControl.getCurrentMode();
+    if (mode !== 'auto') return;
+
+    const tempBaseThreshold = Number.isFinite(
+      params.formulaThreshold.maxTemperature,
+    )
+      ? (params.formulaThreshold.maxTemperature as number)
+      : params.thresholds.maxTempSafe;
+    const humBaseThreshold = Number.isFinite(
+      params.formulaThreshold.maxHumidity,
+    )
+      ? (params.formulaThreshold.maxHumidity as number)
+      : params.thresholds.maxHumidity;
+
+    const tempDelta = Math.max(0, params.thresholds.tempHysteresisDelta);
+    const humDelta = Math.max(0, params.thresholds.humidityHysteresisDelta);
+    const fanFeed = this.resolveFanLevelFeedFromMetricFeed(params.sourceFeed);
+    const key = `${params.deviceId ?? 'global'}:${fanFeed}`;
+    const currentFanLevel = Number(this.feedState.get(fanFeed)?.value);
+
+    const currentTemperature =
+      params.metric === 'temperature'
+        ? params.currentValue
+        : this.metricState.get('temperature');
+    const currentHumidity =
+      params.metric === 'humidity'
+        ? params.currentValue
+        : this.metricState.get('humidity');
+
+    const fanRunning = this.tempHysteresisFanState.has(key)
+      ? (this.tempHysteresisFanState.get(key) as boolean)
+      : Number.isFinite(currentFanLevel) && currentFanLevel > 0;
+
+    const tempTriggerOn =
+      Number.isFinite(currentTemperature) &&
+      (currentTemperature as number) >= tempBaseThreshold + tempDelta;
+    const humTriggerOn =
+      Number.isFinite(currentHumidity) &&
+      (currentHumidity as number) >= humBaseThreshold + humDelta;
+
+    const tempSafeToOff =
+      !Number.isFinite(currentTemperature) ||
+      (currentTemperature as number) <= tempBaseThreshold;
+    const humSafeToOff =
+      !Number.isFinite(currentHumidity) ||
+      (currentHumidity as number) <= humBaseThreshold;
+
+    const shouldTurnOn = !fanRunning && (tempTriggerOn || humTriggerOn);
+    const shouldTurnOff = fanRunning && tempSafeToOff && humSafeToOff;
+
+    if (!shouldTurnOn && !shouldTurnOff) {
+      this.tempHysteresisFanState.set(key, fanRunning);
+      return;
+    }
+
+    const autoOnLevel = Math.max(
+      1,
+      Math.min(100, params.thresholds.autoFanLevelOn),
+    );
+    const nextLevel = shouldTurnOn ? autoOnLevel : 0;
+    await this.publishServerControl(fanFeed, nextLevel);
+    this.tempHysteresisFanState.set(key, nextLevel > 0);
+
+    const action = shouldTurnOn ? 'BAT' : 'TAT';
+    this.logger.log(
+      `${params.deviceName}: Auto ${action} quat theo hysteresis, T=${Number.isFinite(currentTemperature) ? `${currentTemperature}°C` : 'N/A'}, H=${Number.isFinite(currentHumidity) ? `${currentHumidity}%` : 'N/A'}, tempBase=${tempBaseThreshold}°C, tempDelta=${tempDelta}°C, humBase=${humBaseThreshold}%, humDelta=${humDelta}%, feed=${fanFeed}, level=${nextLevel}`,
+    );
+  }
+
+  private buildFormulaHumidityAlertMessage(
+    deviceName: string,
+    formula: FormulaThresholdConfig,
+  ): string {
+    const thresholdText = Number.isFinite(formula.maxHumidity)
+      ? `${formula.maxHumidity}%`
+      : 'ngưỡng công thức';
+
+    if (formula.recipeName) {
+      return `${deviceName}: Độ ẩm chưa đạt ngưỡng công thức (${formula.recipeName}, cần < ${thresholdText}).`;
+    }
+
+    if (formula.fruitType) {
+      return `${deviceName}: Độ ẩm chưa đạt ngưỡng công thức cho ${formula.fruitType} (cần < ${thresholdText}).`;
+    }
+
+    return `${deviceName}: Độ ẩm chưa đạt ngưỡng công thức (cần < ${thresholdText}).`;
+  }
+
+  private buildFormulaTemperatureAlertMessage(
+    deviceName: string,
+    formula: FormulaThresholdConfig,
+  ): string {
+    const thresholdText = Number.isFinite(formula.maxTemperature)
+      ? `${formula.maxTemperature}°C`
+      : 'ngưỡng công thức';
+
+    if (formula.recipeName) {
+      return `${deviceName}: Nhiệt độ vượt ngưỡng công thức (${formula.recipeName}, > ${thresholdText}).`;
+    }
+
+    if (formula.fruitType) {
+      return `${deviceName}: Nhiệt độ vượt ngưỡng công thức cho ${formula.fruitType} (> ${thresholdText}).`;
+    }
+
+    return `${deviceName}: Nhiệt độ vượt ngưỡng công thức (> ${thresholdText}).`;
+  }
+
+  private async autoStopBatchWhenSystemThresholdExceeded(params: {
+    deviceId: number | null;
+    deviceName: string;
+    currentTemperature: number;
+    maxTempSafe: number;
+    autoStopEnabled: boolean;
+    sourceFeed: string;
+  }): Promise<void> {
+    if (!params.autoStopEnabled) return;
+
+    const runningBatch = await this.prisma.batch.findFirst({
+      where: {
+        ...(params.deviceId ? { deviceID: params.deviceId } : {}),
+        batchStatus: {
+          in: ['Running', 'InProgress', 'Active', 'Processing'],
+        },
+      },
+      select: {
+        batchesID: true,
+      },
+      orderBy: { batchesID: 'desc' },
+    });
+
+    if (!runningBatch) return;
+
+    await this.prisma.$transaction([
+      this.prisma.batch.update({
+        where: { batchesID: runningBatch.batchesID },
+        data: {
+          batchStatus: 'Stopped',
+          batchResult: 'SystemThresholdExceeded',
+        },
+      }),
+      this.prisma.batchOperation.updateMany({
+        where: {
+          batchesID: runningBatch.batchesID,
+          endedAt: null,
+        },
+        data: {
+          endedAt: new Date(),
+        },
+      }),
+    ]);
+
+    const fanFeed = this.resolveFanLevelFeedFromMetricFeed(params.sourceFeed);
+    await Promise.all([
+      this.publishServerControl(fanFeed, 0),
+      this.publishServerControl(this.ledFeedKey, 0),
+    ]);
+    this.tempHysteresisFanState.set(
+      `${params.deviceId ?? 'global'}:${fanFeed}`,
+      false,
+    );
+
+    await this.createPendingAlertIfNeeded(
+      params.deviceId,
+      'error',
+      `${params.deviceName}: Da tu dong dung me say vi vuot nguong he thong (${params.currentTemperature}°C > ${params.maxTempSafe}°C).`,
+    );
+
+    this.logger.error(
+      `${params.deviceName}: AUTO-STOP batch ${runningBatch.batchesID} do vuot nguong he thong (${params.currentTemperature}°C > ${params.maxTempSafe}°C).`,
+    );
   }
 
   private async handleMetricAlert(params: {
@@ -911,23 +1337,31 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     if (!this.client || !this.isConnected) return;
 
     const thresholds = await this.getThresholdConfig();
+    const operatingMode = await this.modeControl.getCurrentMode();
 
     const temperature = this.metricState.get('temperature');
     const humidity = this.metricState.get('humidity');
     const light = this.metricState.get('light');
 
-    const doorStatus = Number.isFinite(light)
-      ? light! > thresholds.lightSensorThreshold
-        ? 'OPEN'
-        : 'CLOSE'
-      : 'N/A';
+    const lcdSnapshot = buildLcdSnapshot({
+      operatingMode,
+      nowMs: Date.now(),
+      temperature,
+      humidity,
+      light,
+      lightSensorThreshold: thresholds.lightSensorThreshold,
+      operatorMessage: this.lastOperatorLcdMessage,
+    });
 
-    const line1 = this.toLcdLine(
-      `T:${this.formatMetric(temperature, 'C')} H:${this.formatMetric(humidity, '%')}`,
-    );
-    const line2 = this.toLcdLine(`Door:${doorStatus}`);
+    const line1 = this.toLcdLine(lcdSnapshot.line1);
+    const line2 = this.toLcdLine(lcdSnapshot.line2);
     const lcdMessage = `${line1}${line2}`;
 
-    await this.publishCommand(this.lcdFeedKey, lcdMessage, true);
+    this.publishingAutoLcd = true;
+    try {
+      await this.publishCommand(this.lcdFeedKey, lcdMessage, true);
+    } finally {
+      this.publishingAutoLcd = false;
+    }
   }
 }

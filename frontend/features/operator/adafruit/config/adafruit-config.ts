@@ -25,24 +25,25 @@ const SHARED_FEEDS: DeviceFeeds = {
   temperature: process.env.NEXT_PUBLIC_FEED_TEMPERATURE || 'BBC_TEMP',
   humidity: process.env.NEXT_PUBLIC_FEED_HUMIDITY || 'Humidity',
   light: process.env.NEXT_PUBLIC_FEED_LIGHT || 'Lux',
-  fan: process.env.NEXT_PUBLIC_FEED_FAN || 'fan_state',
   fanLevel: process.env.NEXT_PUBLIC_FEED_FAN_LEVEL || 'fan_level',
-  relay: process.env.NEXT_PUBLIC_FEED_RELAY || 'BBC_LED',
+  led:
+    process.env.NEXT_PUBLIC_FEED_LED ||
+    process.env.NEXT_PUBLIC_FEED_RELAY ||
+    'BBC_LED',
   lcd: process.env.NEXT_PUBLIC_FEED_LCD || 'lcd_text',
 };
 
 /**
  * Feed Keys cho từng máy sấy
  * INPUT  (đọc từ cảm biến) : temperature, humidity, light
- * OUTPUT (ghi lệnh ra)     : fan, relay, lcd
+ * OUTPUT (ghi lệnh ra)     : fanLevel, led, lcd
  */
 export interface DeviceFeeds {
   temperature: string; // DHT20 — °C
   humidity:    string; // DHT20 — %
   light:       string; // Cảm biến ánh sáng — lux
-  fan:         string; // Quạt: "1" bật / "0" tắt
-  fanLevel:    string; // Level quạt: 0..5
-  relay:       string; // Relay: "1" đóng / "0" ngắt
+  fanLevel:    string; // Level quạt: 0..100
+  led:         string; // LED giả lập: "1" bật / "0" tắt
   lcd:         string; // LCD: ghi chuỗi text
 }
 
@@ -60,9 +61,8 @@ export function getMachineFeeds(machineId: string): DeviceFeeds {
     temperature: `drytech.${id}-temperature`,
     humidity:    `drytech.${id}-humidity`,
     light:       `drytech.${id}-light`,
-    fan:         `drytech.${id}-fan`,
     fanLevel:    `drytech.${id}-fan-level`,
-    relay:       `drytech.${id}-relay`,
+    led:         `drytech.${id}-led`,
     lcd:         `drytech.${id}-lcd`,
   };
 }
@@ -73,5 +73,5 @@ export const AIO_THRESHOLDS = {
   tempWarn:   82,   // °C — vàng
   humMin:     8,    // % — quá khô
   humMax:     85,   // % — quá ẩm
-  lightDoor:  700,  // lux — cửa có thể mở
+  lightDoor:  90,  // lux — cửa có thể mở
 };
