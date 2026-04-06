@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateRecipeDto } from './dto/create-recipe.dto';
@@ -7,34 +11,92 @@ import { CreateRecipeDto } from './dto/create-recipe.dto';
 export class RecipesService {
   constructor(private prisma: PrismaService) {}
 
-  findAll() {
-    return this.prisma.recipe.findMany({
-      include: {
-        steps: { orderBy: { stepNo: 'asc' } },
-        stages: { orderBy: { stageOrder: 'asc' } },
-      },
+  private readonly recipeInclude: Prisma.RecipeInclude = {
+    steps: { orderBy: { stepNo: 'asc' as const } },
+    stages: { orderBy: { stageOrder: 'asc' as const } },
+    _count: { select: { batches: true } } as never,
+  };
+
+  private toRecipeResponse(recipe: Record<string, unknown>) {
+    const { _count, ...rest } = recipe as Record<string, unknown> & {
+      _count?: { batches?: number };
+    };
+    return {
+      ...rest,
+      batchCount: _count?.batches ?? 0,
+    };
+  }
+
+  private normalizeStageInput(
+    stage: {
+      stageOrder?: number;
+      durationMinutes?: number;
+      temperatureSetpoint?: number;
+      humiditySetpoint?: number;
+      temperatureGoal?: number;
+      humidityGoal?: number;
+    },
+    index: number,
+  ) {
+    const stageOrder = Number(stage.stageOrder ?? index + 1);
+    const durationMinutes = Number(stage.durationMinutes);
+    const temperatureSetpoint = Number(
+      stage.temperatureSetpoint ?? stage.temperatureGoal,
+    );
+    const humiditySetpoint = Number(
+      stage.humiditySetpoint ?? stage.humidityGoal,
+    );
+
+    if (
+      !Number.isFinite(stageOrder) ||
+      !Number.isFinite(durationMinutes) ||
+      !Number.isFinite(temperatureSetpoint) ||
+      !Number.isFinite(humiditySetpoint)
+    ) {
+      throw new BadRequestException(
+        `stages[${index}] must include numeric stageOrder, durationMinutes, temperatureSetpoint, humiditySetpoint`,
+      );
+    }
+
+    return {
+      stageOrder,
+      durationMinutes,
+      temperatureSetpoint,
+      humiditySetpoint,
+    };
+  }
+
+  async findAll(includeInactive = false) {
+    const rows = await this.prisma.recipe.findMany({
+      where: includeInactive ? undefined : ({ isActive: true } as never),
+      include: this.recipeInclude,
       orderBy: { recipeID: 'asc' },
     });
+
+    return rows.map((row) =>
+      this.toRecipeResponse(row as Record<string, unknown>),
+    );
   }
 
   async findOne(id: number) {
     const recipe = await this.prisma.recipe.findUnique({
       where: { recipeID: id },
-      include: {
-        steps: { orderBy: { stepNo: 'asc' } },
-        stages: { orderBy: { stageOrder: 'asc' } },
-      },
+      include: this.recipeInclude,
     });
     if (!recipe) throw new NotFoundException(`Recipe ${id} not found`);
-    return recipe;
+    return this.toRecipeResponse(recipe as Record<string, unknown>);
   }
 
   async create(dto: CreateRecipeDto) {
     const { steps, stages, ...recipeData } = dto;
 
+    const normalizedStages = (stages ?? []).map((stage, i) =>
+      this.normalizeStageInput(stage, i),
+    );
+
     const derivedStages =
-      stages && stages.length > 0
-        ? stages
+      normalizedStages.length > 0
+        ? normalizedStages
         : (steps ?? [])
             .filter((s) => Number(s.durationMinutes) > 0)
             .map((s, i) => ({
@@ -49,7 +111,7 @@ export class RecipesService {
                 Number.isFinite(s.humiditySetpoint),
             );
 
-    return this.prisma.recipe.create({
+    const created = await this.prisma.recipe.create({
       data: {
         ...recipeData,
         steps: steps
@@ -72,11 +134,10 @@ export class RecipesService {
               }
             : undefined,
       },
-      include: {
-        steps: { orderBy: { stepNo: 'asc' } },
-        stages: { orderBy: { stageOrder: 'asc' } },
-      },
+      include: this.recipeInclude,
     });
+
+    return this.toRecipeResponse(created as Record<string, unknown>);
   }
 
   async update(id: number, dto: Partial<CreateRecipeDto>) {
@@ -91,6 +152,8 @@ export class RecipesService {
     if (recipeData.timeDurationEst !== undefined)
       data.timeDurationEst = recipeData.timeDurationEst;
     if (recipeData.userID !== undefined) data.userID = recipeData.userID;
+    if (recipeData.isActive !== undefined)
+      (data as Record<string, unknown>).isActive = recipeData.isActive;
 
     void steps;
 
@@ -99,29 +162,48 @@ export class RecipesService {
 
       await this.prisma.recipeStage.createMany({
         data: stages.map((stage, i) => ({
+          ...this.normalizeStageInput(stage, i),
           recipeID: id,
-          stageOrder: Number(stage.stageOrder ?? i + 1),
-          durationMinutes: Number(stage.durationMinutes),
-          temperatureSetpoint: Number(stage.temperatureSetpoint),
-          humiditySetpoint: Number(stage.humiditySetpoint),
         })),
       });
     }
 
-    return this.prisma.recipe.update({
+    const updated = await this.prisma.recipe.update({
       where: { recipeID: id },
       data,
-      include: {
-        steps: { orderBy: { stepNo: 'asc' } },
-        stages: { orderBy: { stageOrder: 'asc' } },
-      },
+      include: this.recipeInclude,
     });
+
+    return this.toRecipeResponse(updated as Record<string, unknown>);
   }
 
   async remove(id: number) {
     await this.findOne(id);
+
+    const usedByBatchCount = await this.prisma.batch.count({
+      where: { recipeID: id },
+    });
+
+    if (usedByBatchCount > 0) {
+      const hidden = await this.prisma.recipe.update({
+        where: { recipeID: id },
+        data: { isActive: false } as never,
+        include: this.recipeInclude,
+      });
+
+      return {
+        action: 'hidden' as const,
+        recipe: this.toRecipeResponse(hidden as Record<string, unknown>),
+      };
+    }
+
     await this.prisma.recipeStage.deleteMany({ where: { recipeID: id } });
     await this.prisma.recipeStep.deleteMany({ where: { recipeID: id } });
-    return this.prisma.recipe.delete({ where: { recipeID: id } });
+    await this.prisma.recipe.delete({ where: { recipeID: id } });
+
+    return {
+      action: 'deleted' as const,
+      recipeID: id,
+    };
   }
 }

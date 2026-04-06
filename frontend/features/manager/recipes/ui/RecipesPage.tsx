@@ -14,6 +14,7 @@ import {
   Button,
   Space,
   Input,
+  Select,
   Table,
   Spin,
   App,
@@ -28,6 +29,8 @@ import {
   SearchOutlined,
   EditOutlined,
   DeleteOutlined,
+  EyeInvisibleOutlined,
+  EyeOutlined,
   MinusCircleOutlined,
 } from '@ant-design/icons';
 import { recipesApi, ApiRecipe, RecipeStagePayload, RecipeStepPayload } from '@/shared/lib/api';
@@ -40,13 +43,15 @@ export default function RecipesPage() {
   const [recipes, setRecipes] = useState<ApiRecipe[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [tablePagination, setTablePagination] = useState({ current: 1, pageSize: 10 });
+  const [visibilityFilter, setVisibilityFilter] = useState<'all' | 'active' | 'inactive'>('all');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [editingRecipe, setEditingRecipe] = useState<ApiRecipe | null>(null);
 
   const loadRecipes = async () => {
     try {
-      const data = await recipesApi.getAll();
+      const data = await recipesApi.getAll({ includeInactive: true });
       setRecipes(data);
     } catch {
       message.error('Không thể tải danh sách công thức.');
@@ -152,15 +157,24 @@ export default function RecipesPage() {
   };
 
   const handleDelete = (recipe: ApiRecipe) => {
+    if (recipe.batchCount > 0) {
+      return;
+    }
+
     modal.confirm({
-      title: `Xóa công thức "${recipe.recipeName}"?`,
+      title: `Xóa vĩnh viễn công thức "${recipe.recipeName}"?`,
+      content: 'Chỉ nên xóa khi công thức chưa từng được dùng cho mẻ nào.',
       okText: 'Xóa',
       okButtonProps: { danger: true },
       cancelText: 'Hủy',
       onOk: async () => {
         try {
-          await recipesApi.remove(recipe.recipeID);
-          message.success('Đã xóa công thức.');
+          const result = await recipesApi.remove(recipe.recipeID);
+          if (result.action === 'deleted') {
+            message.success('Đã xóa vĩnh viễn công thức.');
+          } else {
+            message.info('Công thức đã được ẩn vì đã có mẻ tham chiếu.');
+          }
           await loadRecipes();
         } catch {
           message.error('Xóa công thức thất bại.');
@@ -169,15 +183,51 @@ export default function RecipesPage() {
     });
   };
 
-  const filtered = recipes.filter(r =>
-    (r.recipeName ?? '').toLowerCase().includes(search.toLowerCase()) ||
-    (r.recipeFruits ?? '').toLowerCase().includes(search.toLowerCase())
-  );
+  const handleToggleVisibility = async (recipe: ApiRecipe, nextIsActive: boolean) => {
+    try {
+      await recipesApi.update(recipe.recipeID, { isActive: nextIsActive });
+      message.success(nextIsActive ? 'Đã hiển thị lại công thức.' : 'Đã ẩn công thức.');
+      await loadRecipes();
+    } catch {
+      message.error('Cập nhật trạng thái công thức thất bại.');
+    }
+  };
+
+  const filtered = recipes.filter((r) => {
+    const matchedKeyword =
+      (r.recipeName ?? '').toLowerCase().includes(search.toLowerCase()) ||
+      (r.recipeFruits ?? '').toLowerCase().includes(search.toLowerCase());
+
+    const matchedVisibility =
+      visibilityFilter === 'all' ||
+      (visibilityFilter === 'active' && r.isActive) ||
+      (visibilityFilter === 'inactive' && !r.isActive);
+
+    return matchedKeyword && matchedVisibility;
+  });
+
+  useEffect(() => {
+    setTablePagination((prev) => ({ ...prev, current: 1 }));
+  }, [search, visibilityFilter]);
 
   const columns = [
     { title: 'ID', dataIndex: 'recipeID', width: 60 },
     { title: 'Tên công thức', dataIndex: 'recipeName', render: (v: string) => <Text strong>{v}</Text> },
     { title: 'Loại trái cây', dataIndex: 'recipeFruits', render: (v: string) => <Tag color="green">{v}</Tag> },
+    {
+      title: 'Trạng thái',
+      key: 'isActive',
+      render: (_: unknown, r: ApiRecipe) => (
+        <Tag color={r.isActive ? 'success' : 'default'}>
+          {r.isActive ? 'Hiện' : 'Ẩn'}
+        </Tag>
+      ),
+    },
+    {
+      title: 'Số mẻ đã dùng',
+      dataIndex: 'batchCount',
+      render: (v: number) => v ?? 0,
+    },
     {
       title: 'Thời gian ước tính',
       dataIndex: 'timeDurationEst',
@@ -194,7 +244,18 @@ export default function RecipesPage() {
       render: (_: unknown, record: ApiRecipe) => (
         <Space>
           <Button size="small" icon={<EditOutlined />} onClick={() => openEditModal(record)} />
-          <Button size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete(record)} />
+          <Button
+            size="small"
+            icon={record.isActive ? <EyeInvisibleOutlined /> : <EyeOutlined />}
+            onClick={() => void handleToggleVisibility(record, !record.isActive)}
+          >
+            {record.isActive ? 'Ẩn' : 'Hiện'}
+          </Button>
+          {record.batchCount === 0 && (
+            <Button size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete(record)}>
+              Xóa
+            </Button>
+          )}
         </Space>
       ),
     },
@@ -221,6 +282,16 @@ export default function RecipesPage() {
             onChange={e => setSearch(e.target.value)}
             allowClear
           />
+          <Select
+            style={{ width: 150 }}
+            value={visibilityFilter}
+            onChange={(value: 'all' | 'active' | 'inactive') => setVisibilityFilter(value)}
+            options={[
+              { value: 'all', label: 'Tất cả' },
+              { value: 'active', label: 'Đang hiện' },
+              { value: 'inactive', label: 'Đang ẩn' },
+            ]}
+          />
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
             Thêm công thức
           </Button>
@@ -231,8 +302,8 @@ export default function RecipesPage() {
       <Row gutter={16} style={{ marginBottom: 24 }}>
         <Col span={6}>
           <Card style={{ borderRadius: 12, textAlign: 'center' }}>
-            <div style={{ fontSize: 32, fontWeight: 700, color: '#1677ff' }}>{recipes.length}</div>
-            <Text type="secondary">Tổng công thức</Text>
+            <div style={{ fontSize: 32, fontWeight: 700, color: '#1677ff' }}>{recipes.filter((r) => r.isActive).length}</div>
+            <Text type="secondary">Công thức đang hiện</Text>
           </Card>
         </Col>
         <Col span={6}>
@@ -246,17 +317,17 @@ export default function RecipesPage() {
         <Col span={6}>
           <Card style={{ borderRadius: 12, textAlign: 'center' }}>
             <div style={{ fontSize: 32, fontWeight: 700, color: '#faad14' }}>
-              {recipes.reduce((sum, r) => sum + (r.steps?.length ?? 0), 0)}
+              {recipes.reduce((sum, r) => sum + (r.batchCount ?? 0), 0)}
             </div>
-            <Text type="secondary">Tổng bước sấy</Text>
+            <Text type="secondary">Tổng lượt dùng trong mẻ</Text>
           </Card>
         </Col>
         <Col span={6}>
           <Card style={{ borderRadius: 12, textAlign: 'center' }}>
             <div style={{ fontSize: 32, fontWeight: 700, color: '#8c8c8c' }}>
-              {recipes.filter(r => (r.timeDurationEst ?? 0) > 600).length}
+              {recipes.filter((r) => !r.isActive).length}
             </div>
-            <Text type="secondary">Quy trình dài (&gt;10h)</Text>
+            <Text type="secondary">Công thức đang ẩn</Text>
           </Card>
         </Col>
       </Row>
@@ -267,7 +338,17 @@ export default function RecipesPage() {
           dataSource={filtered}
           columns={columns}
           rowKey="recipeID"
-          pagination={{ pageSize: 10 }}
+          pagination={{
+            current: tablePagination.current,
+            pageSize: tablePagination.pageSize,
+            total: filtered.length,
+            showSizeChanger: true,
+            showQuickJumper: false,
+            pageSizeOptions: ['10', '20', '30'],
+            onChange: (current, pageSize) => {
+              setTablePagination({ current, pageSize });
+            },
+          }}
         />
       </Card>
 

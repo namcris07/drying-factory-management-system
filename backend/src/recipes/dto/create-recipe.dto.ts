@@ -3,6 +3,8 @@ import {
   IsOptional,
   IsString,
   IsInt,
+  IsNumber,
+  IsBoolean,
   IsArray,
   ValidateNested,
 } from 'class-validator';
@@ -14,9 +16,11 @@ export class CreateRecipeStepDto {
   stepNo?: number;
 
   @IsOptional()
+  @IsNumber({}, { message: 'temperatureGoal must be a number' })
   temperatureGoal?: number;
 
   @IsOptional()
+  @IsNumber({}, { message: 'humidityGoal must be a number' })
   humidityGoal?: number;
 
   @IsOptional()
@@ -30,20 +34,22 @@ export class CreateRecipeStepDto {
 
 export class CreateRecipeStageDto {
   @IsInt()
-  stageOrder: number;
+  stageOrder!: number;
 
   @IsInt()
-  durationMinutes: number;
+  durationMinutes!: number;
 
-  temperatureSetpoint: number;
+  @IsNumber({}, { message: 'temperatureSetpoint must be a number' })
+  temperatureSetpoint!: number;
 
-  humiditySetpoint: number;
+  @IsNumber({}, { message: 'humiditySetpoint must be a number' })
+  humiditySetpoint!: number;
 }
 
 export class CreateRecipeDto {
   @IsNotEmpty()
   @IsString()
-  recipeName: string;
+  recipeName!: string;
 
   @IsOptional()
   @IsString()
@@ -54,7 +60,12 @@ export class CreateRecipeDto {
   timeDurationEst?: number;
 
   @IsOptional()
+  @IsInt()
   userID?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
 
   @IsOptional()
   @IsArray()

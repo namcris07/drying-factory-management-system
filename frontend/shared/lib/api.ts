@@ -145,18 +145,28 @@ export type ApiRecipe = {
   recipeFruits: string | null;
   timeDurationEst: number | null;
   userID: number | null;
+  isActive: boolean;
+  batchCount: number;
   steps: ApiRecipeStep[];
   stages: ApiRecipeStage[];
 };
 
+export type RecipeRemoveResult =
+  | { action: 'hidden'; recipe: ApiRecipe }
+  | { action: 'deleted'; recipeID: number };
+
 export const recipesApi = {
-  getAll: () => request<ApiRecipe[]>('/recipes'),
+  getAll: (params?: { includeInactive?: boolean }) =>
+    request<ApiRecipe[]>(
+      `/recipes${params?.includeInactive ? '?includeInactive=true' : ''}`,
+    ),
   getOne: (id: number) => request<ApiRecipe>(`/recipes/${id}`),
   create: (data: {
     recipeName: string;
     recipeFruits?: string;
     timeDurationEst?: number;
     userID?: number;
+    isActive?: boolean;
     steps?: RecipeStepPayload[];
     stages?: RecipeStagePayload[];
   }) =>
@@ -168,12 +178,14 @@ export const recipesApi = {
       recipeFruits: string;
       timeDurationEst: number;
       userID: number;
+      isActive: boolean;
       steps: RecipeStepPayload[];
       stages: RecipeStagePayload[];
     }>,
   ) =>
     request<ApiRecipe>(`/recipes/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-  remove: (id: number) => request<void>(`/recipes/${id}`, { method: 'DELETE' }),
+  remove: (id: number) =>
+    request<RecipeRemoveResult>(`/recipes/${id}`, { method: 'DELETE' }),
 };
 
 // ── Batches ───────────────────────────────────────────────────────────────
@@ -192,6 +204,7 @@ export type ApiBatch = {
     | {
         recipeID: number;
         recipeName: string | null;
+        timeDurationEst?: number | null;
         stages?: ApiRecipeStage[];
         steps?: ApiRecipeStep[];
       }
@@ -200,8 +213,31 @@ export type ApiBatch = {
   batchOperations: { boID: number; startedAt: string | null; endedAt: string | null }[];
 };
 
+export type ApiPagination = {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+};
+
+export type ApiBatchList = {
+  items: ApiBatch[];
+  pagination: ApiPagination;
+};
+
 export const batchesApi = {
-  getAll: () => request<ApiBatch[]>('/batches'),
+  getAll: (query?: {
+    status?: 'all' | 'running' | 'completed' | 'fail';
+    page?: number;
+    pageSize?: number;
+  }) => {
+    const params = new URLSearchParams();
+    if (query?.status) params.set('status', query.status);
+    if (query?.page) params.set('page', String(query.page));
+    if (query?.pageSize) params.set('pageSize', String(query.pageSize));
+    const q = params.toString();
+    return request<ApiBatchList>(`/batches${q ? `?${q}` : ''}`);
+  },
   getOne: (id: number) => request<ApiBatch>(`/batches/${id}`),
   create: (data: { recipeID: number; deviceID: number; operationMode?: string; startTime: string }) =>
     request<ApiBatch>('/batches', { method: 'POST', body: JSON.stringify(data) }),
@@ -301,3 +337,103 @@ export const mqttApi = {
       body: JSON.stringify({ feed, value }),
     }),
 };
+
+  // ── Analytics ─────────────────────────────────────────────────────────────
+  export type ApiAnalyticsSummary = {
+    range: { from: string | null; to: string | null };
+    batches: {
+      total: number;
+      success: number;
+      fail: number;
+      running: number;
+      successRate: number;
+      failRate: number;
+    };
+    machines: {
+      total: number;
+      active: number;
+      inactive: number;
+    };
+  };
+
+  export type ApiAnalyticsTrendPoint = {
+    date: string;
+    total: number;
+    success: number;
+    fail: number;
+    running: number;
+    successRate: number;
+  };
+
+  export type ApiAnalyticsTrend = {
+    range: { from: string | null; to: string | null };
+    period?: 'day' | 'week' | 'month' | 'year';
+    status?: 'all' | 'success' | 'fail';
+    points: ApiAnalyticsTrendPoint[];
+    pagination?: ApiPagination;
+  };
+
+  export type ApiAnalyticsHourlyPoint = {
+    hour: string;
+    avg: number;
+    samples: number;
+  };
+
+  export type ApiAnalyticsHourly = {
+    metric: 'temperature' | 'humidity' | string;
+    range: { from: string | null; to: string | null };
+    points: ApiAnalyticsHourlyPoint[];
+  };
+
+  type AnalyticsQuery = {
+    from?: string;
+    to?: string;
+    zoneId?: number;
+  };
+
+  const buildAnalyticsQuery = (query?: AnalyticsQuery) => {
+    const params = new URLSearchParams();
+    if (query?.from) params.set('from', query.from);
+    if (query?.to) params.set('to', query.to);
+    if (query?.zoneId) params.set('zoneId', String(query.zoneId));
+    return params.toString();
+  };
+
+  export const analyticsApi = {
+    getSummary: (query?: AnalyticsQuery) => {
+      const params = buildAnalyticsQuery(query);
+      return request<ApiAnalyticsSummary>(
+        `/analytics/summary${params ? `?${params}` : ''}`,
+      );
+    },
+    getTrend: (
+      query?:
+        | (AnalyticsQuery & {
+            period?: 'day' | 'week' | 'month' | 'year';
+            status?: 'all' | 'success' | 'fail';
+            page?: number;
+            pageSize?: number;
+          })
+        | undefined,
+    ) => {
+      const params = new URLSearchParams(buildAnalyticsQuery(query));
+      if (query?.period) params.set('period', query.period);
+      if (query?.status) params.set('status', query.status);
+      if (query?.page) params.set('page', String(query.page));
+      if (query?.pageSize) params.set('pageSize', String(query.pageSize));
+      const q = params.toString();
+      return request<ApiAnalyticsTrend>(
+        `/analytics/trend${q ? `?${q}` : ''}`,
+      );
+    },
+    getHourlyAvg: (
+      query?: AnalyticsQuery & { metric?: 'temperature' | 'humidity' },
+    ) => {
+      const params = new URLSearchParams(buildAnalyticsQuery(query));
+      if (query?.metric) params.set('metric', query.metric);
+      const q = params.toString();
+      return request<ApiAnalyticsHourly>(
+        `/analytics/hourly-avg${q ? `?${q}` : ''}`,
+      );
+    },
+  };

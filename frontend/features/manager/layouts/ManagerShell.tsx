@@ -14,7 +14,6 @@ import {
   DashboardOutlined, BookOutlined, HistoryOutlined,
   FileTextOutlined, BarChartOutlined, UserOutlined,
   LogoutOutlined, MenuFoldOutlined, MenuUnfoldOutlined,
-  AppstoreOutlined,
 } from '@ant-design/icons';
 import NotificationCenter from '@/features/notifications/ui/NotificationCenter';
 import { clearAuthSession } from '@/shared/auth/session';
@@ -34,7 +33,6 @@ const MENU_ITEMS = [
       { key: '/batches', icon: <HistoryOutlined />,   label: 'Lịch sử Mẻ sấy'      },
       { key: '/reports', icon: <FileTextOutlined />,  label: 'Xuất Báo cáo'         },
       { key: '/ai',      icon: <BarChartOutlined />,  label: 'Phân tích Hiệu suất'  },
-      { key: '/ui',      icon: <AppstoreOutlined />,  label: 'Thư viện Components'  },
     ],
   },
 ];

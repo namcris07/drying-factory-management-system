@@ -52,7 +52,7 @@ import {
   SystemThresholds,
   systemThresholdsFromRecord,
 } from '@/shared/lib/system-thresholds';
-
+import { OperatingModeToggle } from '@/features/operator/dashboard/ui/OperatingModeToggle';
 const { Title, Text } = Typography;
 
 type RuntimeThresholds = {
@@ -291,6 +291,7 @@ export default function AdafruitIOPanelPage() {
           <Button icon={<ReloadOutlined spin={loading} />} onClick={refresh} size="small" style={{ borderRadius: 8 }}>
             Refresh
           </Button>
+          <OperatingModeToggle onModeChange={setOperatingMode} />
         </Space>
       </div>
 

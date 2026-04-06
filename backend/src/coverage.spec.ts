@@ -62,6 +62,7 @@ const createPrismaMock = () => ({
   },
   batch: {
     findMany: jest.fn(),
+    count: jest.fn(),
     findUnique: jest.fn(),
     create: jest.fn(),
     update: jest.fn(),
@@ -112,7 +113,9 @@ const createPrismaMock = () => ({
     update: jest.fn(),
     delete: jest.fn(),
   },
-  $transaction: jest.fn(),
+  $transaction: jest.fn(async (ops: Array<Promise<unknown>>) =>
+    Promise.all(ops),
+  ),
 });
 
 describe('Services coverage', () => {
@@ -193,6 +196,7 @@ describe('Services coverage', () => {
       .mockResolvedValue(undefined);
 
     prisma.batch.findMany.mockResolvedValue([]);
+    prisma.batch.count.mockResolvedValue(0);
     prisma.batch.findUnique.mockImplementation(({ where }: any) =>
       Promise.resolve(
         where.batchesID === 10
@@ -209,6 +213,7 @@ describe('Services coverage', () => {
     );
     prisma.recipe.findUnique.mockResolvedValue({
       recipeID: 1,
+      isActive: true,
       stages: [
         {
           stageID: 1,
@@ -271,6 +276,7 @@ describe('Services coverage', () => {
   it('recipes service handles steps and remove flow', async () => {
     const service = new RecipesService(prisma as any);
     prisma.recipe.findMany.mockResolvedValue([]);
+    prisma.batch.count.mockResolvedValue(0);
     prisma.recipe.findUnique
       .mockResolvedValueOnce(null)
       .mockResolvedValue({ recipeID: 1 });

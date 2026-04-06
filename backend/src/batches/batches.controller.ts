@@ -7,6 +7,7 @@ import {
   Param,
   Body,
   ParseIntPipe,
+  Query,
 } from '@nestjs/common';
 import { BatchesService } from './batches.service';
 import { CreateBatchDto, UpdateBatchDto } from './dto/create-batch.dto';
@@ -16,8 +17,16 @@ export class BatchesController {
   constructor(private batchesService: BatchesService) {}
 
   @Get()
-  findAll() {
-    return this.batchesService.findAll();
+  findAll(
+    @Query('status') status?: 'all' | 'running' | 'completed' | 'fail',
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.batchesService.findAll({
+      status,
+      page: page ? Number(page) : undefined,
+      pageSize: pageSize ? Number(pageSize) : undefined,
+    });
   }
 
   @Get(':id')

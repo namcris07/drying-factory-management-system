@@ -263,10 +263,14 @@ export default function OperatorMachineDetailPage() {
 
     const syncBatchStage = async () => {
       try {
-        const allBatches = await batchesApi.getAll();
+        const batchList = await batchesApi.getAll({
+          status: 'running',
+          page: 1,
+          pageSize: 100,
+        });
         if (!mounted) return;
 
-        const activeBatch = allBatches.find(
+        const activeBatch = batchList.items.find(
           (batch) =>
             batch.deviceID === deviceId &&
             runningStatuses.has(batch.batchStatus ?? ''),
@@ -543,28 +547,28 @@ export default function OperatorMachineDetailPage() {
             : item,
         ),
       );
-      message.info('Da dung me say hien tai.');
+      message.info('Đã dừng mẻ sấy hiện tại.');
     } catch (error) {
-      message.error(error instanceof Error ? error.message : 'Dung me say that bai.');
+      message.error(error instanceof Error ? error.message : 'Đã xảy ra lỗi khi dừng mẻ sấy.');
     }
   };
 
   const handleLedToggle = async (on: boolean) => {
     if (!isManualMode) {
-      message.warning('Che do Auto: khong the dieu khien LED thu cong.');
+      message.warning('Chế độ Auto: không thể điều khiển LED thủ công.');
       return;
     }
     await setLed(on);
-    message.info(`LED -> ${on ? 'BAT' : 'TAT'}`);
+    message.info(`LED -> ${on ? 'BẬT' : 'TẮT'}`);
   };
 
   const handleSendLcd = async () => {
     if (!isManualMode) {
-      message.warning('Chi gui tin nhan LCD tuy chinh trong che do Manual.');
+      message.warning('Chỉ có thể gửi tin nhắn LCD tùy chỉnh trong chế độ Manual.');
       return;
     }
     if (!lcdInput.trim()) {
-      message.warning('Vui long nhap noi dung LCD.');
+      message.warning('Vui lòng nhập nội dung LCD.');
       return;
     }
     setSendingLcd(true);
@@ -628,7 +632,7 @@ export default function OperatorMachineDetailPage() {
               {activeRecipe && (
                 <Text type="secondary" style={{ fontSize: 13 }}>
                   <BookOutlined style={{ marginRight: 4, color: '#1677ff' }} />
-                  Me say: <Text strong style={{ color: '#1677ff' }}>{activeRecipe.name}</Text>
+                  Mẻ sấy: <Text strong style={{ color: '#1677ff' }}>{activeRecipe.name}</Text>
                 </Text>
               )}
               {isRunning && (
@@ -666,8 +670,8 @@ export default function OperatorMachineDetailPage() {
           style={{ marginBottom: 16, borderRadius: 12 }}
           type="warning"
           showIcon
-          message="Nhiet do dang vuot nguong cong thuc"
-          description={`Hien tai ${sensor.temperature.toFixed(1)}°C > setpoint cong thuc ${Math.round(autoTempSetpoint as number)}°C. He thong se canh bao, quat chi bat theo logic auto hysteresis.`}
+          message="Nhiệt độ đang vượt ngưỡng công thức"
+          description={`Hiện tại ${sensor.temperature.toFixed(1)}°C > setpoint công thức ${Math.round(autoTempSetpoint as number)}°C. Hệ thống sẽ cảnh báo, quạt chỉ bật theo logic auto hysteresis.`}
         />
       )}
 

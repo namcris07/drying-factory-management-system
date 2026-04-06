@@ -80,6 +80,7 @@ model Recipe {
   recipeFruits    String? @map("RecipeFruits")
   timeDurationEst Int?    @map("TimeDurationEst")
   userID          Int?    @map("userID")
+  isActive        Boolean @default(true) @map("IsActive")
 
   user                User?                @relation(fields: [userID], references: [userID])
   steps               RecipeStep[]

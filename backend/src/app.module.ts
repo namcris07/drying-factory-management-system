@@ -14,6 +14,7 @@ import { BatchesModule } from './batches/batches.module';
 import { AlertsModule } from './alerts/alerts.module';
 import { SystemConfigModule } from './system-config/system-config.module';
 import { SensorDataModule } from './sensor-data/sensor-data.module';
+import { AnalyticsModule } from './analytics/analytics.module';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { SensorDataModule } from './sensor-data/sensor-data.module';
     AlertsModule,
     SystemConfigModule,
     SensorDataModule,
+    AnalyticsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

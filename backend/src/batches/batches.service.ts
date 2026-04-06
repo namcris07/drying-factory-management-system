@@ -25,6 +25,12 @@ type StageProgress = {
   isFinished: boolean;
 };
 
+type BatchListQuery = {
+  status?: 'all' | 'running' | 'completed' | 'fail';
+  page?: number;
+  pageSize?: number;
+};
+
 @Injectable()
 export class BatchesService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(BatchesService.name);
@@ -46,12 +52,140 @@ export class BatchesService implements OnModuleInit, OnModuleDestroy {
     this.stageTimers.clear();
   }
 
-  findAll() {
+  async findAll(query: BatchListQuery = {}) {
+    const page = Math.max(1, Number(query.page ?? 1));
+    const pageSize = Math.min(100, Math.max(1, Number(query.pageSize ?? 10)));
+    const skip = (page - 1) * pageSize;
+
+    const status = (query.status ?? 'all').toLowerCase();
+
+    const where =
+      status === 'running'
+        ? { batchStatus: { equals: 'Running', mode: 'insensitive' as const } }
+        : status === 'completed'
+          ? {
+              OR: [
+                {
+                  batchStatus: {
+                    equals: 'Completed',
+                    mode: 'insensitive' as const,
+                  },
+                },
+                {
+                  batchResult: {
+                    contains: 'completed',
+                    mode: 'insensitive' as const,
+                  },
+                },
+                {
+                  batchResult: {
+                    contains: 'success',
+                    mode: 'insensitive' as const,
+                  },
+                },
+              ],
+            }
+          : status === 'fail'
+            ? {
+                OR: [
+                  {
+                    batchStatus: {
+                      equals: 'Error',
+                      mode: 'insensitive' as const,
+                    },
+                  },
+                  {
+                    batchStatus: {
+                      equals: 'Stopped',
+                      mode: 'insensitive' as const,
+                    },
+                  },
+                  {
+                    batchResult: {
+                      contains: 'fail',
+                      mode: 'insensitive' as const,
+                    },
+                  },
+                  {
+                    batchResult: {
+                      contains: 'threshold',
+                      mode: 'insensitive' as const,
+                    },
+                  },
+                  {
+                    batchResult: {
+                      contains: 'exceed',
+                      mode: 'insensitive' as const,
+                    },
+                  },
+                ],
+              }
+            : undefined;
+
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.batch.findMany({
+        where,
+        include: {
+          recipe: {
+            select: {
+              recipeID: true,
+              recipeName: true,
+              timeDurationEst: true,
+              stages: {
+                select: {
+                  stageID: true,
+                  stageOrder: true,
+                  durationMinutes: true,
+                  temperatureSetpoint: true,
+                  humiditySetpoint: true,
+                },
+                orderBy: { stageOrder: 'asc' },
+              },
+            },
+          },
+          device: { select: { deviceID: true, deviceName: true } },
+          batchOperations: { orderBy: { startedAt: 'desc' }, take: 10 },
+        },
+        orderBy: { batchesID: 'desc' },
+        skip,
+        take: pageSize,
+      }),
+      this.prisma.batch.count({ where }),
+    ]);
+
+    return {
+      items,
+      pagination: {
+        page,
+        pageSize,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / pageSize)),
+      },
+    };
+  }
+
+  findAllRaw() {
     return this.prisma.batch.findMany({
       include: {
-        recipe: { select: { recipeID: true, recipeName: true } },
+        recipe: {
+          select: {
+            recipeID: true,
+            recipeName: true,
+            timeDurationEst: true,
+            stages: {
+              select: {
+                stageID: true,
+                stageOrder: true,
+                durationMinutes: true,
+                temperatureSetpoint: true,
+                humiditySetpoint: true,
+              },
+              orderBy: { stageOrder: 'asc' },
+            },
+          },
+        },
         device: { select: { deviceID: true, deviceName: true } },
-        batchOperations: { orderBy: { startedAt: 'desc' }, take: 1 },
+        batchOperations: { orderBy: { startedAt: 'desc' }, take: 10 },
       },
       orderBy: { batchesID: 'desc' },
     });
@@ -91,6 +225,12 @@ export class BatchesService implements OnModuleInit, OnModuleDestroy {
 
     if (!recipe) {
       throw new BadRequestException(`Recipe ${dto.recipeID} không tồn tại.`);
+    }
+
+    if (!recipe.isActive) {
+      throw new BadRequestException(
+        `Recipe ${dto.recipeID} đã bị ẩn, không thể tạo mẻ mới.`,
+      );
     }
 
     if (recipe.stages.length === 0) {
@@ -232,6 +372,14 @@ export class BatchesService implements OnModuleInit, OnModuleDestroy {
 
     if (!progress.activeStage) return;
 
+    const currentStageStartedAt = batch.stageStartedAt
+      ? batch.stageStartedAt.getTime()
+      : null;
+    const nextStageStartedAt = progress.activeStageStartedAt.getTime();
+    const isStageChanged =
+      batch.currentStage !== progress.activeStage.stageOrder ||
+      currentStageStartedAt !== nextStageStartedAt;
+
     await this.prisma.batch.update({
       where: { batchesID: batchId },
       data: {
@@ -240,13 +388,15 @@ export class BatchesService implements OnModuleInit, OnModuleDestroy {
       },
     });
 
-    await this.publishStageSetpoints({
-      batchId,
-      stage: progress.activeStage,
-      recipeName: batch.recipe.recipeName,
-      deviceId: batch.device?.deviceID ?? batch.deviceID,
-      deviceName: batch.device?.deviceName ?? null,
-    });
+    if (isStageChanged) {
+      await this.publishStageSetpoints({
+        batchId,
+        stage: progress.activeStage,
+        recipeName: batch.recipe.recipeName,
+        deviceId: batch.device?.deviceID ?? batch.deviceID,
+        deviceName: batch.device?.deviceName ?? null,
+      });
+    }
 
     this.scheduleNextStage(batchId, progress.remainingToNextMs);
   }
@@ -366,6 +516,23 @@ export class BatchesService implements OnModuleInit, OnModuleDestroy {
       this.logger.error(
         `Batch ${params.batchId} stage ${params.stage.stageOrder}: chuyển giai đoạn thất bại do MQTT (${msg}).`,
       );
+
+      const duplicatePendingAlert = await this.prisma.alert.findFirst({
+        where: {
+          batchesID: params.batchId,
+          alertType: 'error',
+          alertStatus: 'pending',
+          alertMessage: {
+            contains: `giai đoạn ${params.stage.stageOrder}`,
+            mode: 'insensitive',
+          },
+        },
+        select: { alertID: true },
+      });
+
+      if (duplicatePendingAlert) {
+        return;
+      }
 
       await this.prisma.alert.create({
         data: {

@@ -5,31 +5,204 @@
  * Lịch sử Mẻ sấy — kết nối backend thật
  */
 import { useState, useEffect } from 'react';
-import { Typography, Card, Table, Tag, Space, Button, Select, Spin, App } from 'antd';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Typography, Card, Table, Tag, Space, Button, Select, Spin, App, Pagination } from 'antd';
 import { HistoryOutlined, ExportOutlined } from '@ant-design/icons';
-import { batchesApi, ApiBatch } from '@/shared/lib/api';
+import { batchesApi, ApiBatch, ApiPagination } from '@/shared/lib/api';
+import { exportRowsToCsv, exportSheetsToExcel } from '@/shared/lib/export';
 
 const { Title, Text } = Typography;
 
+type BatchStatusFilter = 'all' | 'running' | 'completed' | 'fail';
+
+const LONG_RUNNING_THRESHOLD_HOURS = 8;
+
+const normalizeStatus = (value: string | null | undefined): BatchStatusFilter => {
+  const status = (value ?? '').toLowerCase();
+  if (status === 'running' || status === 'completed' || status === 'fail') return status;
+  return 'all';
+};
+
+const statusLabelMap: Record<BatchStatusFilter, string> = {
+  all: 'Tất cả trạng thái',
+  running: 'Đang chạy',
+  completed: 'Hoàn thành',
+  fail: 'Có lỗi',
+};
+
+const isRunningStatus = (status: string | null | undefined): boolean => {
+  return (status ?? '').toLowerCase() === 'running';
+};
+
+const isCompletedStatus = (status: string | null | undefined): boolean => {
+  return (status ?? '').toLowerCase() === 'completed';
+};
+
+const formatDateTime = (value: string | null | undefined): string => {
+  if (!value) return '—';
+  return new Date(value).toLocaleString('vi-VN');
+};
+
+const getBatchStartedAt = (batch: ApiBatch): string | null => {
+  const opStarted = batch.batchOperations.find((op) => op.startedAt)?.startedAt;
+  return opStarted ?? batch.startedAt;
+};
+
+const getBatchEndedAt = (batch: ApiBatch): string | null => {
+  const endedValues = batch.batchOperations
+    .map((op) => op.endedAt)
+    .filter((endedAt): endedAt is string => Boolean(endedAt));
+
+  if (endedValues.length === 0) return null;
+
+  return endedValues.reduce((latest, current) => {
+    return new Date(current).getTime() > new Date(latest).getTime() ? current : latest;
+  });
+};
+
+const getRecipeDurationMinutes = (batch: ApiBatch): number | null => {
+  const recipe = batch.recipe;
+  if (!recipe) return null;
+
+  if (typeof recipe.timeDurationEst === 'number' && recipe.timeDurationEst > 0) {
+    return recipe.timeDurationEst;
+  }
+
+  const stageDuration = (recipe.stages ?? []).reduce((sum, stage) => {
+    const next = Number(stage.durationMinutes ?? 0);
+    return sum + (Number.isFinite(next) ? next : 0);
+  }, 0);
+
+  return stageDuration > 0 ? stageDuration : null;
+};
+
+const getDisplayEndedAt = (batch: ApiBatch): { value: string | null; isEstimated: boolean } => {
+  const endedAt = getBatchEndedAt(batch);
+  if (endedAt) {
+    return { value: endedAt, isEstimated: false };
+  }
+
+  if (!isCompletedStatus(batch.batchStatus)) {
+    return { value: null, isEstimated: false };
+  }
+
+  const startedAt = getBatchStartedAt(batch);
+  const durationMinutes = getRecipeDurationMinutes(batch);
+  if (!startedAt || !durationMinutes) {
+    return { value: null, isEstimated: false };
+  }
+
+  const estimated = new Date(new Date(startedAt).getTime() + durationMinutes * 60 * 1000).toISOString();
+  return { value: estimated, isEstimated: true };
+};
+
+const formatDuration = (start: string | null, end: string | null, isRunning: boolean): string => {
+  if (!start) return '—';
+  if (!end && !isRunning) return '—';
+
+  const startedAtMs = new Date(start).getTime();
+  const endedAtMs = end ? new Date(end).getTime() : Date.now();
+  const durationMs = endedAtMs - startedAtMs;
+
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return '—';
+
+  const totalMinutes = Math.floor(durationMs / (1000 * 60));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  return `${hours}h ${minutes}m`;
+};
+
+const isRunningLong = (batch: ApiBatch): boolean => {
+  if (!isRunningStatus(batch.batchStatus)) return false;
+
+  const startedAt = getBatchStartedAt(batch);
+  if (!startedAt) return false;
+
+  const elapsedHours = (Date.now() - new Date(startedAt).getTime()) / (1000 * 60 * 60);
+  return Number.isFinite(elapsedHours) && elapsedHours > LONG_RUNNING_THRESHOLD_HOURS;
+};
+
 export default function BatchesPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const { message } = App.useApp();
   const [batches, setBatches] = useState<ApiBatch[]>([]);
   const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [paginationMeta, setPaginationMeta] = useState<ApiPagination>({
+    page: 1,
+    pageSize: 10,
+    total: 0,
+    totalPages: 1,
+  });
+  const [tablePagination, setTablePagination] = useState({ current: 1, pageSize: 10 });
+  const [statusFilter, setStatusFilter] = useState<BatchStatusFilter>(
+    normalizeStatus(searchParams.get('status')),
+  );
+
+  const currentPage = tablePagination.current;
+  const currentPageSize = tablePagination.pageSize;
 
   useEffect(() => {
-    batchesApi.getAll()
-      .then(setBatches)
+    setLoading(true);
+    batchesApi
+      .getAll({
+        status: statusFilter,
+        page: currentPage,
+        pageSize: currentPageSize,
+      })
+      .then((res) => {
+        setBatches(res.items);
+        setPaginationMeta(res.pagination);
+      })
       .catch(() => message.error('Không thể tải danh sách mẻ sấy.'))
       .finally(() => setLoading(false));
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [statusFilter, currentPage, currentPageSize, message]);
 
-  const filtered = statusFilter === 'all'
-    ? batches
-    : batches.filter(b => b.batchStatus === statusFilter);
+  useEffect(() => {
+    setStatusFilter(normalizeStatus(searchParams.get('status')));
+  }, [searchParams]);
+
+  useEffect(() => {
+    setTablePagination((prev) => ({ ...prev, current: 1 }));
+  }, [statusFilter]);
+
+  const exportRows = batches.map((batch) => {
+    const startedAt = getBatchStartedAt(batch);
+    const endedAtInfo = getDisplayEndedAt(batch);
+    const endedAt = endedAtInfo.value;
+    const isRunning = isRunningStatus(batch.batchStatus);
+
+    return {
+      'Thiết bị': batch.device?.deviceName ?? '—',
+      'Công thức': batch.recipe?.recipeName ?? '—',
+      'Trạng thái': batch.batchStatus ?? '—',
+      'Kết quả': batch.batchResult ?? '—',
+      'Bắt đầu': formatDateTime(startedAt),
+      'Kết thúc': endedAt
+        ? `${formatDateTime(endedAt)}${endedAtInfo.isEstimated ? ' (ước tính)' : ''}`
+        : isRunning
+          ? 'Đang chạy'
+          : 'Chưa ghi nhận',
+      'Thời lượng': formatDuration(startedAt, endedAt, isRunning),
+      'Cảnh báo': isRunningLong(batch) ? `Chạy quá ${LONG_RUNNING_THRESHOLD_HOURS}h` : '—',
+      'Chất lượng': batch.batchResult ?? '—',
+    };
+  });
+
+  const handleExportCsv = () => {
+    exportRowsToCsv(`batches-${statusFilter}.csv`, exportRows);
+    message.success('Đã tải file CSV.');
+  };
+
+  const handleExportExcel = () => {
+    exportSheetsToExcel(`batches-${statusFilter}.xlsx`, [
+      { name: 'Batches', rows: exportRows },
+    ]);
+    message.success('Đã tải file Excel.');
+  };
 
   const columns = [
-    { title: 'Mã mẻ', dataIndex: 'batchesID', width: 80 },
     {
       title: 'Thiết bị',
       key: 'device',
@@ -42,20 +215,46 @@ export default function BatchesPage() {
     },
     {
       title: 'Trạng thái',
-      dataIndex: 'batchStatus',
-      render: (v: string) => (
-        <Tag color={v === 'Completed' ? 'success' : v === 'Running' ? 'processing' : v === 'Error' ? 'error' : 'default'}>
-          {v === 'Completed' ? 'Hoàn thành' : v === 'Running' ? 'Đang chạy' : v === 'Error' ? 'Lỗi' : v}
-        </Tag>
-      ),
+      key: 'batchStatus',
+      render: (_: unknown, r: ApiBatch) => {
+        const v = r.batchStatus ?? '—';
+        return (
+          <Space size={6}>
+            <Tag color={v === 'Completed' ? 'success' : v === 'Running' ? 'processing' : v === 'Error' ? 'error' : 'default'}>
+              {v === 'Completed' ? 'Hoàn thành' : v === 'Running' ? 'Đang chạy' : v === 'Error' ? 'Lỗi' : v}
+            </Tag>
+            {isRunningLong(r) && <Tag color="warning">Quá {LONG_RUNNING_THRESHOLD_HOURS}h</Tag>}
+          </Space>
+        );
+      },
     },
     {
       title: 'Bắt đầu',
       key: 'startedAt',
+      render: (_: unknown, r: ApiBatch) => formatDateTime(getBatchStartedAt(r)),
+    },
+    {
+      title: 'Kết thúc',
+      key: 'endedAt',
       render: (_: unknown, r: ApiBatch) => {
-        const op = r.batchOperations?.[0];
-        if (!op?.startedAt) return <Text type="secondary">—</Text>;
-        return new Date(op.startedAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+        const endedAtInfo = getDisplayEndedAt(r);
+        const endedAt = endedAtInfo.value;
+        const isRunning = isRunningStatus(r.batchStatus);
+        if (endedAt) {
+          const label = formatDateTime(endedAt);
+          return endedAtInfo.isEstimated ? `${label}` : label;
+        }
+        return isRunning ? <Text type="secondary">Đang chạy</Text> : <Tag color="warning">Chưa ghi nhận</Tag>;
+      },
+    },
+    {
+      title: 'Thời lượng',
+      key: 'duration',
+      render: (_: unknown, r: ApiBatch) => {
+        const startedAt = getBatchStartedAt(r);
+        const endedAt = getDisplayEndedAt(r).value;
+        const isRunning = isRunningStatus(r.batchStatus);
+        return formatDuration(startedAt, endedAt, isRunning);
       },
     },
     {
@@ -80,26 +279,61 @@ export default function BatchesPage() {
         <Space>
           <Select
             value={statusFilter}
-            onChange={setStatusFilter}
+            onChange={(value) => {
+              setStatusFilter(value);
+              const next = value === 'all' ? '/manager/batches' : `/manager/batches?status=${value}`;
+              router.replace(next);
+            }}
             style={{ width: 160 }}
             options={[
-              { value: 'all', label: 'Tất cả trạng thái' },
-              { value: 'Running', label: 'Đang chạy' },
-              { value: 'Completed', label: 'Hoàn thành' },
-              { value: 'Error', label: 'Lỗi' },
+              { value: 'all', label: statusLabelMap.all },
+              { value: 'running', label: statusLabelMap.running },
+              { value: 'completed', label: statusLabelMap.completed },
+              { value: 'fail', label: statusLabelMap.fail },
             ]}
           />
-          <Button type="primary" icon={<ExportOutlined />}>Xuất Excel</Button>
+          <Button onClick={handleExportCsv}>Xuất CSV</Button>
+          <Button type="primary" icon={<ExportOutlined />} onClick={handleExportExcel}>Xuất Excel</Button>
         </Space>
       </div>
 
       <Card style={{ borderRadius: 12 }}>
+        
         <Table
-          dataSource={filtered}
+          dataSource={batches}
           columns={columns}
           rowKey="batchesID"
-          pagination={{ pageSize: 10 }}
+          pagination={false}
+          
         />
+        
+        <div style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Space>
+            <Text type="secondary">Hiển thị</Text>
+            <Select
+              value={tablePagination.pageSize}
+              style={{ width: 96 }}
+              onChange={(nextPageSize: number) => {
+                setTablePagination({ current: 1, pageSize: nextPageSize });
+              }}
+              options={[
+                { value: 10, label: '10 / trang' },
+                { value: 20, label: '20 / trang' },
+                { value: 30, label: '30 / trang' },
+              ]}
+            />
+          </Space>
+          <Pagination
+            current={tablePagination.current}
+            pageSize={tablePagination.pageSize}
+            total={paginationMeta.total}
+            showSizeChanger={false}
+            showQuickJumper={false}
+            onChange={(current, pageSize) => {
+              setTablePagination({ current, pageSize });
+            }}
+          />
+        </div>
       </Card>
     </div>
   );

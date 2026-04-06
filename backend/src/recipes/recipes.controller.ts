@@ -7,6 +7,7 @@ import {
   Param,
   Body,
   ParseIntPipe,
+  Query,
 } from '@nestjs/common';
 import { RecipesService } from './recipes.service';
 import { CreateRecipeDto } from './dto/create-recipe.dto';
@@ -16,8 +17,11 @@ export class RecipesController {
   constructor(private recipesService: RecipesService) {}
 
   @Get()
-  findAll() {
-    return this.recipesService.findAll();
+  findAll(@Query('includeInactive') includeInactive?: string) {
+    const showInactive = ['1', 'true', 'yes'].includes(
+      (includeInactive ?? '').toLowerCase(),
+    );
+    return this.recipesService.findAll(showInactive);
   }
 
   @Get(':id')

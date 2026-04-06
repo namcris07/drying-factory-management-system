@@ -14,21 +14,54 @@ const prisma = new PrismaClient({ adapter } as any);
 async function main() {
   console.log('🌱 Seeding database...');
 
+  const now = new Date();
+  const startDate = new Date(now);
+  startDate.setDate(startDate.getDate() - 89);
+  startDate.setHours(0, 0, 0, 0);
+
+  const addDays = (base: Date, days: number, hours = 0, minutes = 0) => {
+    const value = new Date(base);
+    value.setDate(value.getDate() + days);
+    value.setHours(hours, minutes, 0, 0);
+    return value;
+  };
+
+  const seededRandom = (seed: number) => {
+    const value = Math.sin(seed * 12.9898 + 78.233) * 43758.5453;
+    return value - Math.floor(value);
+  };
+
+  const batchCountsByDay = (dayIndex: number) => {
+    if (dayIndex === 89) return 10;
+
+    const day = addDays(startDate, dayIndex);
+    const weekday = day.getDay();
+    const isWeekend = weekday === 0 || weekday === 6;
+    const base = isWeekend ? 8 : 11;
+    const spread = isWeekend ? 5 : 6;
+
+    return base + Math.floor(seededRandom(dayIndex + weekday * 31) * spread);
+  };
+
   // Reset dev data to keep seed deterministic.
-  await prisma.alertResolution.deleteMany();
-  await prisma.alert.deleteMany();
-  await prisma.batchOperation.deleteMany();
-  await prisma.batch.deleteMany();
-  await prisma.sensorDataLog.deleteMany();
-  await prisma.recipeStep.deleteMany();
-  await prisma.recipeStage.deleteMany();
-  await prisma.recipeModification.deleteMany();
-  await prisma.recipe.deleteMany();
-  await prisma.device.deleteMany();
-  await prisma.zone.deleteMany();
-  await prisma.systemConfigUpdate.deleteMany();
-  await prisma.systemConfig.deleteMany();
-  await prisma.user.deleteMany();
+  await prisma.$executeRawUnsafe(`
+    TRUNCATE TABLE
+      "AlertResolution",
+      "Alerts",
+      "BatchOperation",
+      "Batches",
+      "SensorDataLog",
+      "RecipeSteps",
+      "RecipeStage",
+      "RecipeModification",
+      "Recipes",
+      "Devices",
+      "Zones",
+      "SystemConfigUpdate",
+      "SystemConfig",
+      "User"
+    RESTART IDENTITY CASCADE;
+  `);
 
   // ── 1. Users ──────────────────────────────────────────────────────────────
   const users = await Promise.all([
@@ -77,7 +110,7 @@ async function main() {
       data: {
         zoneID: 1,
         zoneName: 'Zone A',
-        zoneDescription: 'Khu vực sấy chính - chỉ vận hành máy A1',
+        zoneDescription: 'Khu vực sấy chính - cụm máy A1/A2/A3',
         userID: 3,
       },
     }),
@@ -94,6 +127,24 @@ async function main() {
       sensor: 'drytech/zone-a/m-a1/sensor',
       cmd: 'drytech/zone-a/m-a1/cmd',
       status: 'Active',
+    },
+    {
+      id: 2,
+      name: 'Máy sấy A2',
+      type: 'Dryer',
+      zoneID: 1,
+      sensor: 'drytech/zone-a/m-a2/sensor',
+      cmd: 'drytech/zone-a/m-a2/cmd',
+      status: 'Active',
+    },
+    {
+      id: 3,
+      name: 'Máy sấy A3',
+      type: 'Dryer',
+      zoneID: 1,
+      sensor: 'drytech/zone-a/m-a3/sensor',
+      cmd: 'drytech/zone-a/m-a3/cmd',
+      status: 'Maintenance',
     },
   ];
 
@@ -231,16 +282,61 @@ async function main() {
   console.log(`  ✓ ${recipeData.length} recipes created`);
 
   // ── 5. Batches ────────────────────────────────────────────────────────────
-  const batchData = [
-    {
-      id: 1,
-      status: 'Running',
-      result: null,
-      recipeID: 1,
-      deviceID: 1,
-      startedAt: new Date(Date.now() - 30 * 60 * 1000),
-    },
-  ];
+  const batchData = [] as Array<{
+    id: number;
+    status: 'Completed' | 'Stopped' | 'Error' | 'Running';
+    result: string | null;
+    recipeID: number;
+    deviceID: number;
+    startedAt: Date;
+  }>;
+
+  let batchID = 1;
+  for (let dayIndex = 0; dayIndex < 90; dayIndex += 1) {
+    const count = batchCountsByDay(dayIndex);
+    const dayBase = addDays(startDate, dayIndex);
+
+    for (let slot = 0; slot < count; slot += 1) {
+      const recipeID = ((dayIndex + slot) % recipeData.length) + 1;
+      const deviceID = slot % 7 === 6 ? 3 : slot % 3 === 2 ? 2 : 1;
+      const startHour = 6 + ((slot * 2 + dayIndex) % 12);
+      const startMinute = (slot % 4) * 15;
+      const timeStamp = addDays(dayBase, 0, startHour, startMinute);
+
+      let status: 'Completed' | 'Stopped' | 'Error' | 'Running' = 'Completed';
+      let result: string | null = 'CompletedBySchedule';
+
+      const pattern = (dayIndex * 17 + slot * 5) % 20;
+      if (pattern === 0 || pattern === 11) {
+        status = 'Error';
+        result = slot % 2 === 0 ? 'ManualFail' : 'SensorFault';
+      } else if (pattern === 4 || pattern === 15) {
+        status = 'Stopped';
+        if (deviceID === 3) {
+          result = 'HumidityOutOfRange';
+        } else {
+          result = 'SystemThresholdExceeded';
+        }
+      } else if (dayIndex === 89 && slot >= count - 1) {
+        status = 'Running';
+        result = null;
+      } else if (pattern === 8) {
+        status = 'Completed';
+        result = 'CompletedBySchedule';
+      }
+
+      batchData.push({
+        id: batchID,
+        status,
+        result,
+        recipeID,
+        deviceID,
+        startedAt: timeStamp,
+      });
+
+      batchID += 1;
+    }
+  }
 
   const batches = await Promise.all(
     batchData.map((b) =>
@@ -262,7 +358,62 @@ async function main() {
   );
   console.log(`  ✓ ${batches.length} batches created`);
 
-  // ── 6. Alerts ─────────────────────────────────────────────────────────────
+  // ── 6. Sensor Logs ───────────────────────────────────────────────────────
+  const sensorLogData: Array<{
+    timestamp: Date;
+    temperature: number;
+    humidity: number;
+    deviceID: number;
+  }> = [];
+
+  for (let index = 0; index < batchData.length; index += 1) {
+    const batch = batchData[index];
+    const tempShift = batch.deviceID === 2 ? 1.6 : 0;
+    const humShift = batch.deviceID === 2 ? -1.1 : 0;
+    const maintenanceShift = batch.deviceID === 3 ? 2.1 : 0;
+
+    for (const hour of [0, 6, 12, 18]) {
+      const timePoint = new Date(batch.startedAt);
+      timePoint.setHours(hour, (index % 4) * 10, 0, 0);
+      const cycle = (index % 8) * 0.75;
+      const tempBase =
+        53 +
+        (batch.startedAt.getDate() % 10) * 0.8 +
+        cycle +
+        tempShift +
+        maintenanceShift +
+        (hour >= 12 ? 2.0 : 0);
+      const humBase =
+        33 -
+        (batch.startedAt.getDate() % 7) * 0.6 +
+        humShift -
+        maintenanceShift * 0.35 -
+        (hour >= 18 ? 2.0 : 0);
+
+      sensorLogData.push({
+        timestamp: timePoint,
+        temperature: Number((tempBase + (hour % 5) * 0.25).toFixed(1)),
+        humidity: Number((humBase - (hour % 3) * 0.35).toFixed(1)),
+        deviceID: batch.deviceID,
+      });
+    }
+  }
+
+  await prisma.sensorDataLog.createMany({
+    data: sensorLogData.map((row) => ({
+      logTimestamp: row.timestamp,
+      deviceID: row.deviceID,
+      measurements: {
+        temperature: row.temperature,
+        humidity: row.humidity,
+        sensorType: 'environment',
+        feed: 'temperature',
+      },
+    })),
+  });
+  console.log(`  ✓ ${sensorLogData.length} sensor logs created`);
+
+  // ── 7. Alerts ─────────────────────────────────────────────────────────────
   const alertData = [
     {
       id: 1,
@@ -291,7 +442,7 @@ async function main() {
   );
   console.log(`  ✓ ${alerts.length} alerts created`);
 
-  // ── 7. System Config (Thresholds) ─────────────────────────────────────────
+  // ── 8. System Config (Thresholds) ─────────────────────────────────────────
   const configData: Record<string, string> = {
     maxTempSafe: '90',
     minHumidity: '8',
