@@ -16,10 +16,10 @@
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
-    "pretest": "npm run prisma:generate",
+    "pretest": "npx prisma generate",
     "test": "jest --runInBand",
     "test:watch": "jest --watch",
-    "pretest:cov": "npm run prisma:generate",
+    "pretest:cov": "npx prisma generate",
     "test:cov": "jest --coverage --runInBand",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json"
