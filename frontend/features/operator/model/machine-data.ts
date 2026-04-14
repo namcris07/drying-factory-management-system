@@ -5,6 +5,7 @@
 
 export interface Machine {
   id: string;
+  deviceID?: number;
   name: string;
   zone: string;
   status: 'Running' | 'Idle' | 'Error' | 'Maintenance';
@@ -18,6 +19,13 @@ export interface Machine {
   errorMsg?: string;
   doorOpen?: boolean;
   errorAcked?: boolean;
+  sensorFeeds?: string[];
+  sensorState?: {
+    feed: string;
+    sensorType: string;
+    value: unknown;
+    updatedAt: string | null;
+  }[];
 }
 
 export interface Recipe {

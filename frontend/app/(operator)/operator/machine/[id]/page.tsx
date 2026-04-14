@@ -71,6 +71,10 @@ function inferDeviceId(machineCode: string): number | null {
   return Number.isInteger(num) && num > 0 ? num : null;
 }
 
+function normalizeFeedName(feed: string): string {
+  return feed.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
 type StatusKey = 'Running' | 'Idle' | 'Error' | 'Maintenance';
 
 const statusCfg: Record<StatusKey, { text: string; tagColor: 'success' | 'default' | 'error' | 'warning' }> = {
@@ -162,6 +166,50 @@ export default function OperatorMachineDetailPage() {
     refresh,
   } = useAdafruitIO(feeds);
 
+  const configuredFeedKeys = useMemo(() => {
+    return new Set(
+      (machine?.sensorFeeds ?? [])
+        .map((feed) => normalizeFeedName(String(feed ?? '').trim()))
+        .filter(Boolean),
+    );
+  }, [machine?.sensorFeeds]);
+
+  const hasFeed = (tokens: string[]) => {
+    for (const feed of configuredFeedKeys) {
+      for (const token of tokens) {
+        if (feed.includes(token)) return true;
+      }
+    }
+    return false;
+  };
+
+  const hasTemperatureFeed = hasFeed(['temp', 'temperature']);
+  const hasHumidityFeed = hasFeed(['humid', 'humidity']);
+  const hasLightFeed = hasFeed(['light', 'lux']);
+  const hasLedFeed = hasFeed(['led']);
+  const hasFanFeed = hasFeed(['fan']);
+  const hasLcdFeed = hasFeed(['lcd']);
+
+  const valueFromSensorState = (tokens: string[]): number | null => {
+    const row = (machine?.sensorState ?? []).find((item) => {
+      const normalized = normalizeFeedName(item.feed);
+      return tokens.some((token) => normalized.includes(token));
+    });
+    if (!row) return null;
+    const num = Number(row.value);
+    return Number.isFinite(num) ? num : null;
+  };
+
+  const effectiveTemperature = hasTemperatureFeed
+    ? (valueFromSensorState(['temp', 'temperature']) ?? sensor.temperature)
+    : null;
+  const effectiveHumidity = hasHumidityFeed
+    ? (valueFromSensorState(['humid', 'humidity']) ?? sensor.humidity)
+    : null;
+  const effectiveLight = hasLightFeed
+    ? (valueFromSensorState(['light', 'lux']) ?? sensor.light)
+    : null;
+
   const elapsed = (() => {
     if (!machine?.startTime) return '--';
     const [h, m] = machine.startTime.split(':').map(Number);
@@ -218,7 +266,8 @@ export default function OperatorMachineDetailPage() {
     return Math.max(0, Math.min(100, Math.round((elapsedMs / durationMs) * 100)));
   }, [activeRecipe?.duration, elapsedMsSnapshot, machine?.progress, machine?.startTime]);
 
-  const doorOpenByLux = sensor.light > DOOR_OPEN_LUX;
+  const doorOpenByLux =
+    hasLightFeed && effectiveLight !== null && effectiveLight > DOOR_OPEN_LUX;
   const isManualMode = operatingMode === 'manual';
 
   const recipeTempSetpoint = selectedRecipe?.temp ?? activeRecipe?.temp ?? null;
@@ -233,8 +282,9 @@ export default function OperatorMachineDetailPage() {
   const formulaTempExceeded =
     !isManualMode &&
     autoTempSetpoint !== null &&
-    Number.isFinite(sensor.temperature) &&
-    sensor.temperature > autoTempSetpoint;
+    effectiveTemperature !== null &&
+    Number.isFinite(effectiveTemperature) &&
+    effectiveTemperature > autoTempSetpoint;
 
   const visibleTempSetpoint = isManualMode
     ? manualTempSetpoint
@@ -245,8 +295,8 @@ export default function OperatorMachineDetailPage() {
 
   useEffect(() => {
     if (isAdjustingFan) return;
-    setFanLevelDraft(output.fanLevel);
-  }, [isAdjustingFan, output.fanLevel]);
+    setFanLevelDraft(hasFanFeed ? output.fanLevel : 0);
+  }, [hasFanFeed, isAdjustingFan, output.fanLevel]);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -554,6 +604,10 @@ export default function OperatorMachineDetailPage() {
   };
 
   const handleLedToggle = async (on: boolean) => {
+    if (!hasLedFeed) {
+      message.warning('Thiết bị chưa cấu hình feed LED.');
+      return;
+    }
     if (!isManualMode) {
       message.warning('Chế độ Auto: không thể điều khiển LED thủ công.');
       return;
@@ -563,6 +617,10 @@ export default function OperatorMachineDetailPage() {
   };
 
   const handleSendLcd = async () => {
+    if (!hasLcdFeed) {
+      message.warning('Thiết bị chưa cấu hình feed LCD.');
+      return;
+    }
     if (!isManualMode) {
       message.warning('Chỉ có thể gửi tin nhắn LCD tùy chỉnh trong chế độ Manual.');
       return;
@@ -671,7 +729,7 @@ export default function OperatorMachineDetailPage() {
           type="warning"
           showIcon
           message="Nhiệt độ đang vượt ngưỡng công thức"
-          description={`Hiện tại ${sensor.temperature.toFixed(1)}°C > setpoint công thức ${Math.round(autoTempSetpoint as number)}°C. Hệ thống sẽ cảnh báo, quạt chỉ bật theo logic auto hysteresis.`}
+          description={`Hiện tại ${(effectiveTemperature ?? 0).toFixed(1)}°C > setpoint công thức ${Math.round(autoTempSetpoint as number)}°C. Hệ thống sẽ cảnh báo, quạt chỉ bật theo logic auto hysteresis.`}
         />
       )}
 
@@ -734,7 +792,7 @@ export default function OperatorMachineDetailPage() {
               </div>
             }
           >
-            {isRunning ? (
+            {isRunning && (hasTemperatureFeed || hasHumidityFeed) ? (
               <ResponsiveContainer width="100%" height={260}>
                 <LineChart data={history} margin={{ top: 5, right: 24, left: -10, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
@@ -766,26 +824,30 @@ export default function OperatorMachineDetailPage() {
                     iconType="circle"
                     iconSize={9}
                   />
-                  <Line
-                    yAxisId="temp"
-                    type="monotone"
-                    dataKey="temperature"
-                    name="temperature"
-                    stroke="#ff7a00"
-                    strokeWidth={2.5}
-                    dot={false}
-                    activeDot={{ r: 5, fill: '#ff7a00' }}
-                  />
-                  <Line
-                    yAxisId="hum"
-                    type="monotone"
-                    dataKey="humidity"
-                    name="humidity"
-                    stroke="#1677ff"
-                    strokeWidth={2.5}
-                    dot={false}
-                    activeDot={{ r: 5, fill: '#1677ff' }}
-                  />
+                  {hasTemperatureFeed && (
+                    <Line
+                      yAxisId="temp"
+                      type="monotone"
+                      dataKey="temperature"
+                      name="temperature"
+                      stroke="#ff7a00"
+                      strokeWidth={2.5}
+                      dot={false}
+                      activeDot={{ r: 5, fill: '#ff7a00' }}
+                    />
+                  )}
+                  {hasHumidityFeed && (
+                    <Line
+                      yAxisId="hum"
+                      type="monotone"
+                      dataKey="humidity"
+                      name="humidity"
+                      stroke="#1677ff"
+                      strokeWidth={2.5}
+                      dot={false}
+                      activeDot={{ r: 5, fill: '#1677ff' }}
+                    />
+                  )}
                 </LineChart>
               </ResponsiveContainer>
             ) : (
@@ -802,7 +864,11 @@ export default function OperatorMachineDetailPage() {
                 }}
               >
                 <PauseCircleOutlined style={{ fontSize: 48, marginBottom: 12 }} />
-                <Text type="secondary">Biểu đồ sẽ hiển thị khi máy đang chạy</Text>
+                <Text type="secondary">
+                  {isRunning
+                    ? 'Thiết bị chưa cấu hình feed nhiệt độ/độ ẩm để hiển thị biểu đồ'
+                    : 'Biểu đồ sẽ hiển thị khi máy đang chạy'}
+                </Text>
               </div>
             )}
           </Card>
@@ -892,7 +958,7 @@ export default function OperatorMachineDetailPage() {
                 >
                   <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Nhiệt độ</div>
                   <div style={{ fontSize: 44, fontWeight: 900, color: '#ff7a00', lineHeight: 1 }}>
-                    {sensor.temperature > 0 ? sensor.temperature.toFixed(1) : '--'}
+                    {effectiveTemperature !== null ? effectiveTemperature.toFixed(1) : '--'}
                   </div>
                   <div style={{ fontSize: 14, color: '#ff7a00', fontWeight: 600 }}>°C</div>
                 </div>
@@ -908,7 +974,7 @@ export default function OperatorMachineDetailPage() {
                 >
                   <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Độ ẩm</div>
                   <div style={{ fontSize: 44, fontWeight: 900, color: '#1677ff', lineHeight: 1 }}>
-                    {sensor.humidity > 0 ? sensor.humidity.toFixed(1) : '--'}
+                    {effectiveHumidity !== null ? effectiveHumidity.toFixed(1) : '--'}
                   </div>
                   <div style={{ fontSize: 14, color: '#1677ff', fontWeight: 600 }}>%</div>
                 </div>
@@ -1079,10 +1145,11 @@ export default function OperatorMachineDetailPage() {
                         LED
                       </Text>
                       <Switch
-                        checked={output.ledOn}
-                        disabled={!isManualMode}
+                        checked={hasLedFeed ? output.ledOn : false}
+                        disabled={!isManualMode || !hasLedFeed}
                         onChange={(checked) => void handleLedToggle(checked)}
                       />
+                      {!hasLedFeed && <Text type="secondary" style={{ fontSize: 11 }}>Chưa cấu hình LED feed</Text>}
                     </Space>
                   </Card>
                 </Col>
@@ -1093,7 +1160,7 @@ export default function OperatorMachineDetailPage() {
                         Quạt
                       </Text>
                       <Tag color={output.fanOn ? 'success' : 'default'}>
-                        {output.fanOn ? 'Đang chạy' : 'Đang tắt'}
+                        {!hasFanFeed ? 'Chưa cấu hình' : output.fanOn ? 'Đang chạy' : 'Đang tắt'}
                       </Tag>
                     </Space>
                   </Card>
@@ -1106,22 +1173,24 @@ export default function OperatorMachineDetailPage() {
                       max={100}
                       step={1}
                       value={fanLevelDraft}
-                      disabled={!isManualMode}
+                      disabled={!isManualMode || !hasFanFeed}
                       onChange={(value) => {
-                        if (!isManualMode) return;
+                        if (!isManualMode || !hasFanFeed) return;
                         if (typeof value !== 'number') return;
                         setIsAdjustingFan(true);
                         setFanLevelDraft(value);
                       }}
                       onChangeComplete={(value) => {
-                        if (!isManualMode) return;
+                        if (!isManualMode || !hasFanFeed) return;
                         if (typeof value !== 'number') return;
                         void setFanLevel(value).finally(() => {
                           setIsAdjustingFan(false);
                         });
                       }}
                     />
-                    <Text type="secondary">Mức hiện tại: {fanLevelDraft}%</Text>
+                    <Text type="secondary">
+                      {hasFanFeed ? `Mức hiện tại: ${fanLevelDraft}%` : 'Chưa cấu hình feed quạt'}
+                    </Text>
                   </Card>
                 </Col>
               </Row>
@@ -1136,7 +1205,7 @@ export default function OperatorMachineDetailPage() {
                 </div>
                 <LcdDisplay message={output.lcdMessage} />
               </div>
-              {isManualMode ? (
+              {isManualMode && hasLcdFeed ? (
                 <>
                   <TextArea
                     rows={3}
@@ -1157,7 +1226,11 @@ export default function OperatorMachineDetailPage() {
                     Gửi LCD
                   </Button>
                 </>
-              ) : ""}
+              ) : (
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  {hasLcdFeed ? 'Chỉ chỉnh LCD ở chế độ Manual.' : 'Chưa cấu hình feed LCD.'}
+                </Text>
+              )}
             </div>
 
             {isMaintenance && (
@@ -1198,7 +1271,7 @@ export default function OperatorMachineDetailPage() {
           type="error"
           showIcon
           message="Cảnh báo thất thoát nhiệt"
-          description={`Lux hiện tại (${sensor.light}) vượt ngưỡng mở cửa (${DOOR_OPEN_LUX}) quá ${HEAT_LOSS_DELAY_MS / 1000} giây khi máy đang chạy.`}
+          description={`Lux hiện tại (${effectiveLight ?? '--'}) vượt ngưỡng mở cửa (${DOOR_OPEN_LUX}) quá ${HEAT_LOSS_DELAY_MS / 1000} giây khi máy đang chạy.`}
         />
       )}
     </div>

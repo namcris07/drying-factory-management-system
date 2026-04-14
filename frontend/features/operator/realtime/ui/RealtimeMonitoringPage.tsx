@@ -4,7 +4,7 @@
  * app/(operator)/operator/realtime/page.tsx
  * Giám sát Thời gian thực
  */
-import { Typography, Card, Row, Col, Tag, Progress, Table } from 'antd';
+import { Typography, Card, Row, Col, Tag, Progress, Table, Space } from 'antd';
 import { DesktopOutlined } from '@ant-design/icons';
 import { useOperatorContext } from '@/features/operator/model/operator-context';
 
@@ -13,6 +13,23 @@ const { Title, Text } = Typography;
 export default function RealTimeMonitoringPage() {
   const { machines, zone } = useOperatorContext();
   const zoneMachines = machines.filter(m => m.zone === zone);
+
+  const sensorLabel = (sensorType: string, feed: string) => {
+    if (sensorType === 'temperature') return 'Nhiet do';
+    if (sensorType === 'humidity') return 'Do am';
+    if (sensorType === 'light') return 'Anh sang';
+    return feed;
+  };
+
+  const sensorValue = (sensorType: string, value: unknown) => {
+    if (value === null || value === undefined || value === '') return '--';
+    const num = Number(value);
+    if (!Number.isFinite(num)) return String(value);
+    if (sensorType === 'temperature') return `${Math.round(num * 10) / 10}°C`;
+    if (sensorType === 'humidity') return `${Math.round(num * 10) / 10}%`;
+    if (sensorType === 'light') return `${Math.round(num * 10) / 10} lux`;
+    return String(Math.round(num * 10) / 10);
+  };
 
   const columns = [
     { title: 'Máy', dataIndex: 'name', width: 120 },
@@ -27,6 +44,22 @@ export default function RealTimeMonitoringPage() {
     },
     { title: 'Nhiệt độ', dataIndex: 'temp', render: (v: number) => v ? `${v}°C` : '—' },
     { title: 'Độ ẩm', dataIndex: 'humidity', render: (v: number) => v ? `${v}%` : '—' },
+    {
+      title: 'Sensor dong',
+      dataIndex: 'sensorState',
+      render: (items: { feed: string; sensorType: string; value: unknown }[] | undefined) => {
+        if (!items || items.length === 0) return '—';
+        return (
+          <Space wrap size={[6, 6]}>
+            {items.map((item) => (
+              <Tag key={item.feed}>
+                {sensorLabel(item.sensorType, item.feed)}: {sensorValue(item.sensorType, item.value)}
+              </Tag>
+            ))}
+          </Space>
+        );
+      },
+    },
     { title: 'Công thức', dataIndex: 'recipe', render: (v: string) => v || '—' },
     {
       title: 'Tiến độ',
