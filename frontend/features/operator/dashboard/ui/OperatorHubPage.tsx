@@ -61,6 +61,23 @@ export default function OperatorHubPage() {
     maintenance: zoneMachines.filter(m => m.status === 'Maintenance').length,
   };
 
+  const sensorLabel = (sensorType: string, feed: string) => {
+    if (sensorType === 'temperature') return 'Nhiet do';
+    if (sensorType === 'humidity') return 'Do am';
+    if (sensorType === 'light') return 'Anh sang';
+    return feed;
+  };
+
+  const sensorValue = (sensorType: string, value: unknown) => {
+    if (value === null || value === undefined || value === '') return '--';
+    const num = Number(value);
+    if (!Number.isFinite(num)) return String(value);
+    if (sensorType === 'temperature') return `${Math.round(num * 10) / 10}°C`;
+    if (sensorType === 'humidity') return `${Math.round(num * 10) / 10}%`;
+    if (sensorType === 'light') return `${Math.round(num * 10) / 10} lux`;
+    return String(Math.round(num * 10) / 10);
+  };
+
   const handleQuickStart = () => {
     if (!selectedRecipe || !quickStartMachine) {
       messageApi.warning('Vui lòng chọn công thức!');
@@ -233,39 +250,63 @@ export default function OperatorHubPage() {
                   {/* RUNNING / IDLE: Sensor display */}
                   {(isRunning || isIdle) && (
                     <>
-                      {/* Large sensor numbers */}
+                      {/* Dynamic sensor display */}
                       <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
-                        <div
-                          style={{
-                            flex: 1,
-                            background: 'rgba(255,122,0,0.09)',
-                            borderRadius: 12,
-                            padding: '12px 0',
-                            textAlign: 'center',
-                          }}
-                        >
-                          <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 3 }}>🌡️ Nhiệt độ</div>
-                          <div style={{ fontSize: 40, fontWeight: 900, color: '#ff7a00', lineHeight: 1 }}>
-                            {machine.temp !== undefined ? machine.temp : '--'}
+                        {(machine.sensorState && machine.sensorState.length > 0
+                          ? machine.sensorState.slice(0, 2)
+                          : [
+                              { feed: 'temperature', sensorType: 'temperature', value: machine.temp },
+                              { feed: 'humidity', sensorType: 'humidity', value: machine.humidity },
+                            ]
+                        ).map((sensor, index) => (
+                          <div
+                            key={`${machine.id}-${sensor.feed}-${index}`}
+                            style={{
+                              flex: 1,
+                              background:
+                                sensor.sensorType === 'temperature'
+                                  ? 'rgba(255,122,0,0.09)'
+                                  : sensor.sensorType === 'humidity'
+                                    ? 'rgba(22,119,255,0.09)'
+                                    : 'rgba(82,196,26,0.09)',
+                              borderRadius: 12,
+                              padding: '12px 8px',
+                              textAlign: 'center',
+                            }}
+                          >
+                            <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 3 }}>
+                              {sensorLabel(sensor.sensorType, sensor.feed)}
+                            </div>
+                            <div
+                              style={{
+                                fontSize: 26,
+                                fontWeight: 900,
+                                color:
+                                  sensor.sensorType === 'temperature'
+                                    ? '#ff7a00'
+                                    : sensor.sensorType === 'humidity'
+                                      ? '#1677ff'
+                                      : '#52c41a',
+                                lineHeight: 1.1,
+                              }}
+                            >
+                              {sensorValue(sensor.sensorType, sensor.value)}
+                            </div>
                           </div>
-                          <div style={{ fontSize: 13, color: '#ff7a00', fontWeight: 600, marginTop: 2 }}>°C</div>
-                        </div>
-                        <div
-                          style={{
-                            flex: 1,
-                            background: 'rgba(22,119,255,0.09)',
-                            borderRadius: 12,
-                            padding: '12px 0',
-                            textAlign: 'center',
-                          }}
-                        >
-                          <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 3 }}>💧 Độ ẩm</div>
-                          <div style={{ fontSize: 40, fontWeight: 900, color: '#1677ff', lineHeight: 1 }}>
-                            {machine.humidity !== undefined ? machine.humidity : '--'}
-                          </div>
-                          <div style={{ fontSize: 13, color: '#1677ff', fontWeight: 600, marginTop: 2 }}>%</div>
-                        </div>
+                        ))}
                       </div>
+
+                      {machine.sensorState && machine.sensorState.length > 2 && (
+                        <div style={{ marginBottom: 10 }}>
+                          <Space size={[6, 6]} wrap>
+                            {machine.sensorState.slice(2).map((sensor) => (
+                              <Tag key={`${machine.id}-${sensor.feed}`}>
+                                {sensorLabel(sensor.sensorType, sensor.feed)}: {sensorValue(sensor.sensorType, sensor.value)}
+                              </Tag>
+                            ))}
+                          </Space>
+                        </div>
+                      )}
 
                       {/* Running: recipe + progress */}
                       {isRunning && (

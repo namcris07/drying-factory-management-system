@@ -91,17 +91,31 @@ export type ApiDevice = {
   deviceStatus: string | null;
   deviceType: string | null;
   mqttTopicSensor: string | null;
+  sensorFeeds?: string[];
   mqttTopicCmd: string | null;
   zoneID: number | null;
   zone: { zoneID: number; zoneName: string | null } | null;
   metaData: Record<string, unknown> | null;
 };
 
+export type DeviceUpsertPayload = {
+  deviceName: string;
+  deviceStatus?: string;
+  deviceType?: string;
+  mqttTopicSensor?: string;
+  sensorFeeds?: string[];
+  mqttTopicCmd?: string;
+  zoneID?: number;
+  metaData?: Record<string, unknown>;
+};
+
+export type DevicePatchPayload = Partial<DeviceUpsertPayload>;
+
 export const devicesApi = {
   getAll: () => request<ApiDevice[]>('/devices'),
-  create: (data: Partial<ApiDevice>) =>
+  create: (data: DeviceUpsertPayload) =>
     request<ApiDevice>('/devices', { method: 'POST', body: JSON.stringify(data) }),
-  update: (id: number, data: Partial<ApiDevice>) =>
+  update: (id: number, data: DevicePatchPayload) =>
     request<ApiDevice>(`/devices/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   remove: (id: number) => request<void>(`/devices/${id}`, { method: 'DELETE' }),
 };
@@ -309,9 +323,25 @@ export type ApiMqttStatus = {
   subscribedFeeds: string[];
 };
 
+export type ApiMqttDeviceFeedState = {
+  feed: string;
+  sensorType: string;
+  topic: string | null;
+  value: unknown;
+  source: 'adafruit' | 'server-command' | 'server-simulate' | null;
+  updatedAt: string | null;
+};
+
+export type ApiMqttDeviceState = {
+  deviceId: number;
+  feeds: ApiMqttDeviceFeedState[];
+};
+
 export const mqttApi = {
   getStatus: () => request<ApiMqttStatus>('/mqtt/status'),
   getState: () => request<ApiMqttStateItem[]>('/mqtt/state'),
+  getDeviceState: (deviceId: number) =>
+    request<ApiMqttDeviceState>(`/mqtt/device/${deviceId}/state`),
   subscribeFeeds: (feeds: string[]) =>
     request<{ ok: boolean; feeds: string[]; note: string }>('/mqtt/subscribe', {
       method: 'POST',

@@ -1,4 +1,12 @@
-import { Body, Controller, Get, HttpCode, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  ParseIntPipe,
+  Post,
+} from '@nestjs/common';
 import { PublishCommandDto } from './dto/publish-command.dto';
 import { SimulateIncomingDto } from './dto/simulate-incoming.dto';
 import { SubscribeFeedsDto } from './dto/subscribe-feeds.dto';
@@ -16,6 +24,11 @@ export class MqttController {
   @Get('state')
   getState() {
     return this.mqttService.getFeedState();
+  }
+
+  @Get('device/:id/state')
+  getDeviceState(@Param('id', ParseIntPipe) id: number) {
+    return this.mqttService.getDeviceFeedState(id);
   }
 
   @Post('subscribe')

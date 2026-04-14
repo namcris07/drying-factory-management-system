@@ -4,9 +4,8 @@
  * contexts/OperatorContext.tsx
  * Context để chia sẻ state giữa OperatorLayout và các operator pages
  */
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, ReactNode, useRef } from 'react';
 import { Machine, Recipe } from '@/features/operator/model/machine-data';
-import { getMachineFeeds } from '@/features/operator/adafruit/config/adafruit-config';
 import { devicesApi, mqttApi, recipesApi } from '@/shared/lib/api';
 
 export type OperatorContextType = {
@@ -36,6 +35,11 @@ interface OperatorProviderProps {
 export function OperatorProvider({ children, zone, operatorName }: OperatorProviderProps) {
   const [machines, setMachines] = useState<Machine[]>([]);
   const [recipes, setRecipes] = useState<Recipe[]>([]);
+  const machinesRef = useRef<Machine[]>([]);
+
+  useEffect(() => {
+    machinesRef.current = machines;
+  }, [machines]);
 
   useEffect(() => {
     let mounted = true;
@@ -50,6 +54,31 @@ export function OperatorProvider({ children, zone, operatorName }: OperatorProvi
       return `M-A${id}`;
     };
 
+    const parseSensorFeeds = (raw: unknown): string[] => {
+      if (Array.isArray(raw)) {
+        return Array.from(
+          new Set(
+            raw
+              .map((item) => String(item ?? '').trim())
+              .filter(Boolean),
+          ),
+        );
+      }
+
+      if (typeof raw === 'string') {
+        return Array.from(
+          new Set(
+            raw
+              .split(/[\n,;]/)
+              .map((item) => item.trim())
+              .filter(Boolean),
+          ),
+        );
+      }
+
+      return [];
+    };
+
     const loadBaseData = async () => {
       try {
         const [deviceRows, recipeRows] = await Promise.all([
@@ -61,11 +90,14 @@ export function OperatorProvider({ children, zone, operatorName }: OperatorProvi
 
         const mappedMachines: Machine[] = deviceRows.map((row) => ({
           id: toMachineId(row.deviceName, row.mqttTopicSensor, row.deviceID),
+          deviceID: row.deviceID,
           name: row.deviceName || `May say ${row.deviceID}`,
           zone: row.zone?.zoneName || zone,
           status: row.deviceStatus === 'Active' ? 'Idle' : 'Maintenance',
           temp: 0,
           humidity: 0,
+          sensorFeeds: parseSensorFeeds(row.sensorFeeds ?? row.mqttTopicSensor),
+          sensorState: [],
         }));
 
         const mappedRecipes: Recipe[] = recipeRows.map((row) => {
@@ -113,21 +145,57 @@ export function OperatorProvider({ children, zone, operatorName }: OperatorProvi
 
     const syncFromServer = async () => {
       try {
-        const state = await mqttApi.getState();
-        const byFeed = new Map(state.map((item) => [item.feed, item.value]));
+        const machineRows = machinesRef.current.filter((item) =>
+          Number.isFinite(item.deviceID),
+        );
+        if (machineRows.length === 0) return;
+
+        const stateRows = await Promise.all(
+          machineRows.map(async (machine) => {
+            try {
+              const state = await mqttApi.getDeviceState(machine.deviceID as number);
+              return [machine.deviceID as number, state] as const;
+            } catch {
+              return [machine.deviceID as number, null] as const;
+            }
+          }),
+        );
 
         if (!mounted) return;
 
+        const byDevice = new Map(stateRows);
+
         setMachines((prev) =>
           prev.map((machine) => {
-            const feeds = getMachineFeeds(machine.id);
-            const temp = parseNumber(byFeed.get(feeds.temperature));
-            const humidity = parseNumber(byFeed.get(feeds.humidity));
+            if (!machine.deviceID) return machine;
+
+            const deviceState = byDevice.get(machine.deviceID);
+            if (!deviceState) return machine;
+
+            const tempFeed = deviceState.feeds.find(
+              (feed) => feed.sensorType === 'temperature',
+            );
+            const humidityFeed = deviceState.feeds.find(
+              (feed) => feed.sensorType === 'humidity',
+            );
+
+            const temp = parseNumber(tempFeed?.value);
+            const humidity = parseNumber(humidityFeed?.value);
 
             return {
               ...machine,
               temp: temp ?? machine.temp,
               humidity: humidity ?? machine.humidity,
+              sensorState: deviceState.feeds.map((feed) => ({
+                feed: feed.feed,
+                sensorType: feed.sensorType,
+                value: feed.value,
+                updatedAt: feed.updatedAt,
+              })),
+              sensorFeeds:
+                deviceState.feeds.length > 0
+                  ? deviceState.feeds.map((feed) => feed.feed)
+                  : machine.sensorFeeds,
             };
           }),
         );

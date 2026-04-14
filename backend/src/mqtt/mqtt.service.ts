@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   Logger,
+  NotFoundException,
   OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
@@ -22,6 +23,15 @@ type FeedState = {
   value: unknown;
   source: 'adafruit' | 'server-command' | 'server-simulate';
   updatedAt: string;
+};
+
+type DeviceFeedState = {
+  feed: string;
+  sensorType: string;
+  topic: string | null;
+  value: unknown;
+  source: 'adafruit' | 'server-command' | 'server-simulate' | null;
+  updatedAt: string | null;
 };
 
 type MetricKey = 'temperature' | 'humidity' | 'light';
@@ -127,7 +137,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     this.client.on('connect', () => {
       this.isConnected = true;
       this.logger.log('Da ket noi Adafruit IO MQTT thanh cong.');
-      this.subscribeToFeeds();
+      void this.refreshSubscriptionsFromDevices();
       this.startLcdAutoPushLoop();
     });
 
@@ -165,8 +175,13 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    const targetFeeds =
-      feeds && feeds.length > 0 ? feeds : this.getDefaultSubscribeFeeds();
+    const requestedFeeds =
+      feeds && feeds.length > 0
+        ? feeds.map((item) => item.trim()).filter(Boolean)
+        : [];
+    const targetFeeds = Array.from(
+      new Set([...this.getDefaultSubscribeFeeds(), ...requestedFeeds]),
+    );
 
     if (targetFeeds.length === 0) {
       this.logger.warn('Khong co feed nao de subscribe.');
@@ -184,6 +199,14 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       this.subscribedFeeds = new Set(targetFeeds);
       this.logger.log(`Dang lang nghe feeds: ${targetFeeds.join(', ')}`);
     });
+  }
+
+  async refreshSubscriptionsFromDevices() {
+    const deviceFeeds = await this.getConfiguredFeedsFromDevices();
+    const fallbackFeeds = this.getFallbackSubscribeFeeds();
+
+    const selectedFeeds = deviceFeeds.length > 0 ? deviceFeeds : fallbackFeeds;
+    this.subscribeToFeeds(selectedFeeds);
   }
 
   async publishCommand(
@@ -321,6 +344,53 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  async getDeviceFeedState(deviceId: number): Promise<{
+    deviceId: number;
+    feeds: DeviceFeedState[];
+  }> {
+    const device = await this.prisma.device.findUnique({
+      where: { deviceID: deviceId },
+      select: {
+        deviceID: true,
+        mqttTopicSensor: true,
+        metaData: true,
+      },
+    });
+
+    if (!device) {
+      throw new NotFoundException(`Device ${deviceId} not found`);
+    }
+
+    const configuredFeeds = this.extractDeviceFeeds(
+      device.mqttTopicSensor,
+      device.metaData,
+    );
+
+    const currentFeedState = new Map(
+      this.getFeedState().map((item) => [
+        this.normalizeFeedKey(item.feed),
+        item,
+      ]),
+    );
+
+    const feeds = configuredFeeds.map((feed) => {
+      const state = currentFeedState.get(this.normalizeFeedKey(feed));
+      return {
+        feed,
+        sensorType: this.detectSensorType(feed),
+        topic: state?.topic ?? null,
+        value: state?.value,
+        source: state?.source ?? null,
+        updatedAt: state?.updatedAt ?? null,
+      };
+    });
+
+    return {
+      deviceId,
+      feeds,
+    };
+  }
+
   private isMqttEnabled() {
     return (
       !!this.username &&
@@ -331,30 +401,42 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
   }
 
   private getDefaultSubscribeFeeds() {
-    const defaultFeeds = [
-      'temperature',
-      'humidity',
-      'light',
-      this.fanLevelFeedKey,
-      this.ledFeedKey,
-      this.lcdFeedKey,
-      'device_status',
-      this.modeFeedKey,
-    ];
+    return [this.modeFeedKey];
+  }
 
+  private getFallbackSubscribeFeeds() {
     const fromEnv = this.configService.get<string>(
       'ADAFRUIT_IO_SUBSCRIBE_FEEDS',
     );
-    if (!fromEnv) {
-      return Array.from(new Set(defaultFeeds));
-    }
+    if (!fromEnv) return [];
 
-    const envFeeds = fromEnv
+    return fromEnv
       .split(',')
       .map((item) => item.trim())
       .filter(Boolean);
+  }
 
-    return Array.from(new Set([...envFeeds, this.modeFeedKey]));
+  private async getConfiguredFeedsFromDevices(): Promise<string[]> {
+    const rows = await this.prisma.device.findMany({
+      select: {
+        mqttTopicSensor: true,
+        metaData: true,
+      },
+    });
+
+    const feeds = new Set<string>();
+
+    for (const row of rows) {
+      const deviceFeeds = this.extractDeviceFeeds(
+        row.mqttTopicSensor,
+        row.metaData,
+      );
+      for (const feed of deviceFeeds) {
+        feeds.add(feed);
+      }
+    }
+
+    return Array.from(feeds);
   }
 
   /**
@@ -379,6 +461,58 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
 
   private toTopic(feed: string) {
     return `${this.username}/feeds/${feed}`;
+  }
+
+  private detectSensorType(feed: string): string {
+    const normalized = this.normalizeFeedKey(feed);
+    if (normalized.includes('temperature') || normalized.includes('temp')) {
+      return 'temperature';
+    }
+    if (normalized.includes('humidity') || normalized.includes('humid')) {
+      return 'humidity';
+    }
+    if (normalized.includes('light') || normalized.includes('lux')) {
+      return 'light';
+    }
+    if (normalized.includes('led')) {
+      return 'led';
+    }
+    if (normalized.includes('fan')) {
+      return 'fan';
+    }
+    if (normalized.includes('lcd')) {
+      return 'lcd';
+    }
+    return 'custom';
+  }
+
+  private splitFeeds(raw: string | null | undefined): string[] {
+    if (!raw) return [];
+    return raw
+      .split(/[\n,;]/)
+      .map((feed) => feed.trim())
+      .filter(Boolean);
+  }
+
+  private extractDeviceFeeds(
+    mqttTopicSensor: string | null,
+    metaData: Prisma.JsonValue | null,
+  ): string[] {
+    const fromText = this.splitFeeds(mqttTopicSensor);
+
+    if (!metaData || typeof metaData !== 'object' || Array.isArray(metaData)) {
+      return Array.from(new Set(fromText));
+    }
+
+    const fromMeta = Array.isArray(
+      (metaData as { sensorFeeds?: unknown }).sensorFeeds,
+    )
+      ? ((metaData as { sensorFeeds?: unknown }).sensorFeeds as unknown[])
+          .map((feed) => String(feed ?? '').trim())
+          .filter(Boolean)
+      : [];
+
+    return Array.from(new Set([...fromMeta, ...fromText]));
   }
 
   private toPayload(value: unknown) {

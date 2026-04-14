@@ -253,7 +253,10 @@ describe('Services coverage', () => {
   });
 
   it('devices service handles crud and not found', async () => {
-    const service = new DevicesService(prisma as any);
+    const mqttService = {
+      subscribeToFeeds: jest.fn(),
+    };
+    const service = new DevicesService(prisma as any, mqttService as any);
     prisma.device.findMany.mockResolvedValue([]);
     prisma.device.findUnique
       .mockResolvedValueOnce(null)

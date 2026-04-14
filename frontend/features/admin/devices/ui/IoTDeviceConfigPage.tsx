@@ -5,23 +5,147 @@
  * Cấu hình Thiết bị IoT — kết nối backend thật
  */
 import { useState, useEffect } from 'react';
-import { Typography, Card, Table, Tag, Button, Space, Badge, Spin, App } from 'antd';
+import {
+  Typography,
+  Card,
+  Table,
+  Tag,
+  Button,
+  Space,
+  Badge,
+  Spin,
+  App,
+  Modal,
+  Form,
+  Input,
+  Select,
+} from 'antd';
 import { ApiOutlined, PlusOutlined, EditOutlined, SyncOutlined } from '@ant-design/icons';
-import { devicesApi, ApiDevice } from '@/shared/lib/api';
+import { devicesApi, ApiDevice, zonesApi, ApiZone } from '@/shared/lib/api';
 
 const { Title, Text } = Typography;
 
 export default function IoTDeviceConfigPage() {
   const { message } = App.useApp();
+  const [form] = Form.useForm();
   const [devices, setDevices] = useState<ApiDevice[]>([]);
+  const [zones, setZones] = useState<ApiZone[]>([]);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [openModal, setOpenModal] = useState(false);
+  const [editingDevice, setEditingDevice] = useState<ApiDevice | null>(null);
+
+  const parseSensorFeeds = (device: ApiDevice) => {
+    const fromMeta = Array.isArray(device.metaData?.sensorFeeds)
+      ? (device.metaData?.sensorFeeds as unknown[])
+      : [];
+
+    const normalizedMeta = fromMeta
+      .map((item) => String(item ?? '').trim())
+      .filter(Boolean);
+
+    const fromText = String(device.mqttTopicSensor ?? '')
+      .split(/[\n,;]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    return Array.from(new Set([...normalizedMeta, ...fromText]));
+  };
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const [deviceRows, zoneRows] = await Promise.all([
+        devicesApi.getAll(),
+        zonesApi.getAll(),
+      ]);
+      setDevices(deviceRows);
+      setZones(zoneRows);
+    } catch {
+      message.error('Không thể tải dữ liệu thiết bị.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    devicesApi.getAll()
-      .then(setDevices)
-      .catch(() => message.error('Không thể tải danh sách thiết bị.'))
-      .finally(() => setLoading(false));
+    void loadData();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const openCreate = () => {
+    setEditingDevice(null);
+    form.setFieldsValue({
+      deviceName: '',
+      deviceType: 'Dryer',
+      deviceStatus: 'Active',
+      sensorFeeds: [],
+      mqttTopicCmd: '',
+      zoneID: undefined,
+    });
+    setOpenModal(true);
+  };
+
+  const openEdit = (device: ApiDevice) => {
+    setEditingDevice(device);
+    form.setFieldsValue({
+      deviceName: device.deviceName ?? '',
+      deviceType: device.deviceType ?? 'Dryer',
+      deviceStatus: device.deviceStatus ?? 'Active',
+      sensorFeeds: parseSensorFeeds(device),
+      mqttTopicCmd: device.mqttTopicCmd ?? '',
+      zoneID: device.zoneID ?? undefined,
+    });
+    setOpenModal(true);
+  };
+
+  const saveDevice = async () => {
+    try {
+      const values = await form.validateFields();
+      setSaving(true);
+
+      const sensorFeeds: string[] = Array.from(
+        new Set(
+          (Array.isArray(values.sensorFeeds) ? values.sensorFeeds : [])
+            .map((item: unknown) => String(item ?? '').trim())
+            .filter(Boolean),
+        ),
+      );
+
+      const payload = {
+        deviceName: String(values.deviceName ?? '').trim(),
+        deviceType: String(values.deviceType ?? '').trim() || undefined,
+        deviceStatus: String(values.deviceStatus ?? '').trim() || undefined,
+        mqttTopicCmd: String(values.mqttTopicCmd ?? '').trim() || undefined,
+        zoneID: values.zoneID,
+        sensorFeeds,
+        mqttTopicSensor: sensorFeeds.join(','),
+      };
+
+      if (editingDevice) {
+        if (sensorFeeds.length === 0) {
+          await devicesApi.remove(editingDevice.deviceID);
+          message.success('Đã xóa thiết bị vì không còn cảm biến nào được cấu hình.');
+        } else {
+          await devicesApi.update(editingDevice.deviceID, payload);
+          message.success('Đã cập nhật thiết bị và danh sách topic cảm biến.');
+        }
+      } else {
+        if (sensorFeeds.length === 0) {
+          message.warning('Thiết bị mới cần ít nhất 1 cảm biến.');
+          return;
+        }
+        await devicesApi.create(payload);
+        message.success('Đã tạo thiết bị mới.');
+      }
+
+      setOpenModal(false);
+      await loadData();
+    } catch {
+      // Validation/API errors are surfaced via form/message.
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const columns = [
     { title: 'ID', dataIndex: 'deviceID', width: 80 },
@@ -45,15 +169,29 @@ export default function IoTDeviceConfigPage() {
     {
       title: 'MQTT Sensor Topic',
       dataIndex: 'mqttTopicSensor',
-      render: (v: string) => <Text code style={{ fontSize: 11 }}>{v}</Text>,
+      render: (_: string, r: ApiDevice) => {
+        const feeds = parseSensorFeeds(r);
+        if (feeds.length === 0) return '—';
+        return (
+          <Space size={[4, 4]} wrap>
+            {feeds.map((feed) => (
+              <Tag key={`${r.deviceID}-${feed}`} color="blue">{feed}</Tag>
+            ))}
+          </Space>
+        );
+      },
     },
     {
       title: 'Thao tác',
       key: 'action',
-      render: () => (
+      render: (_: unknown, record: ApiDevice) => (
         <Space>
-          <Button size="small" icon={<EditOutlined />} />
-          <Button size="small" icon={<SyncOutlined />} />
+          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>
+            Sửa
+          </Button>
+          <Button size="small" icon={<SyncOutlined />} onClick={() => void loadData()}>
+            Tải lại
+          </Button>
         </Space>
       ),
     },
@@ -71,7 +209,7 @@ export default function IoTDeviceConfigPage() {
           </Title>
           <Text type="secondary">Quản lý sensors, actuators và các thiết bị kết nối</Text>
         </div>
-        <Button type="primary" icon={<PlusOutlined />}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
           Thêm thiết bị
         </Button>
       </div>
@@ -97,6 +235,79 @@ export default function IoTDeviceConfigPage() {
           pagination={{ pageSize: 10 }}
         />
       </Card>
+
+      <Modal
+        title={editingDevice ? 'Cập nhật thiết bị' : 'Thêm thiết bị mới'}
+        open={openModal}
+        onCancel={() => setOpenModal(false)}
+        onOk={() => void saveDevice()}
+        okText={editingDevice ? 'Lưu thay đổi' : 'Tạo thiết bị'}
+        cancelText="Hủy"
+        confirmLoading={saving}
+      >
+        <Form form={form} layout="vertical">
+          <Form.Item
+            label="Tên thiết bị"
+            name="deviceName"
+            rules={[{ required: true, message: 'Vui lòng nhập tên thiết bị.' }]}
+          >
+            <Input placeholder="Ví dụ: Máy sấy A2" />
+          </Form.Item>
+
+          <Space style={{ width: '100%' }} size={12}>
+            <Form.Item label="Loại thiết bị" name="deviceType" style={{ width: 180 }}>
+              <Select
+                options={[
+                  { value: 'Dryer', label: 'Dryer' },
+                  { value: 'SensorHub', label: 'SensorHub' },
+                  { value: 'Custom', label: 'Custom' },
+                ]}
+              />
+            </Form.Item>
+
+            <Form.Item label="Trạng thái" name="deviceStatus" style={{ width: 180 }}>
+              <Select
+                options={[
+                  { value: 'Active', label: 'Active' },
+                  { value: 'Inactive', label: 'Inactive' },
+                  { value: 'Maintenance', label: 'Maintenance' },
+                ]}
+              />
+            </Form.Item>
+
+            <Form.Item label="Zone" name="zoneID" style={{ width: 220 }}>
+              <Select
+                allowClear
+                placeholder="Chọn zone"
+                options={zones.map((z) => ({
+                  value: z.zoneID,
+                  label: z.zoneName ?? `Zone ${z.zoneID}`,
+                }))}
+              />
+            </Form.Item>
+          </Space>
+
+          <Form.Item
+            label="Danh sách topic cảm biến MQTT"
+            name="sensorFeeds"
+            extra="Nhập nhiều topic (ví dụ: m-a1-temperature, m-a1-humidity, m-a1-light)."
+          >
+            <Select
+              mode="tags"
+              tokenSeparators={[',', ';', ' ']}
+              placeholder="Nhập topic và nhấn Enter"
+            />
+          </Form.Item>
+
+          <Form.Item
+            label="MQTT topic command"
+            name="mqttTopicCmd"
+            extra="Ví dụ: m-a1-cmd hoặc drytech.m-a1-command"
+          >
+            <Input placeholder="Topic điều khiển cho thiết bị" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 }
