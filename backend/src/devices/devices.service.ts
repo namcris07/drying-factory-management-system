@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateDeviceDto } from './dto/create-device.dto';
@@ -19,36 +24,94 @@ export class DevicesService {
       .filter(Boolean);
   }
 
-  private extractSensorFeeds(dto: Partial<CreateDeviceDto>): string[] {
-    const fromArray = (dto.sensorFeeds ?? [])
-      .map((feed) => String(feed ?? '').trim())
+  private pickSingleFeed(raw: string | null | undefined): string {
+    const normalized = this.splitFeedText(raw)
+      .map((feed) => this.normalizeFeedKey(feed))
       .filter(Boolean);
-
-    const fromText = this.splitFeedText(dto.mqttTopicSensor);
-
-    return Array.from(new Set([...fromArray, ...fromText]));
+    return normalized[0] ?? '';
   }
 
-  private extractSensorFeedsFromDevice(device: {
-    mqttTopicSensor: string | null;
-    metaData: Prisma.JsonValue | null;
-  }): string[] {
-    const fromText = this.splitFeedText(device.mqttTopicSensor);
-    const meta = device.metaData;
+  private assertSingleFeedFormat(raw: string | null | undefined): string {
+    const feeds = this.splitFeedText(raw)
+      .map((feed) => this.normalizeFeedKey(feed))
+      .filter(Boolean);
 
-    if (!meta || typeof meta !== 'object' || Array.isArray(meta)) {
-      return Array.from(new Set(fromText));
+    if (feeds.length > 1) {
+      throw new ConflictException({
+        message: 'Mỗi thiết bị chỉ được phép có duy nhất 1 feed key.',
+      });
     }
 
-    const fromMeta = Array.isArray(
-      (meta as { sensorFeeds?: unknown }).sensorFeeds,
-    )
-      ? ((meta as { sensorFeeds?: unknown }).sensorFeeds as unknown[])
-          .map((feed) => String(feed ?? '').trim())
-          .filter(Boolean)
-      : [];
+    return feeds[0] ?? '';
+  }
 
-    return Array.from(new Set([...fromMeta, ...fromText]));
+  private normalizeFeedKey(raw: string | null | undefined): string {
+    const text = String(raw ?? '')
+      .trim()
+      .toLowerCase();
+    if (!text) return '';
+
+    const marker = '/feeds/';
+    const markerIndex = text.indexOf(marker);
+    if (markerIndex >= 0) {
+      return text.slice(markerIndex + marker.length).trim();
+    }
+
+    return text;
+  }
+
+  private async assertNoFeedConflicts(
+    dto: Partial<CreateDeviceDto>,
+    currentDeviceId?: number,
+  ) {
+    const requestedFeed = this.assertSingleFeedFormat(dto.mqttTopicSensor);
+    if (!requestedFeed) return;
+
+    const rows = await this.prisma.device.findMany({
+      select: {
+        deviceID: true,
+        mqttTopicSensor: true,
+      },
+    });
+
+    const feedOwners = new Map<string, Set<number>>();
+    for (const row of rows) {
+      if (currentDeviceId && row.deviceID === currentDeviceId) continue;
+
+      const feed = this.pickSingleFeed(row.mqttTopicSensor);
+      const key = this.normalizeFeedKey(feed);
+      if (key) {
+        if (!feedOwners.has(key)) {
+          feedOwners.set(key, new Set<number>());
+        }
+        feedOwners.get(key)?.add(row.deviceID);
+      }
+
+      for (const legacyFeed of this.splitFeedText(row.mqttTopicSensor).slice(
+        1,
+      )) {
+        const key = this.normalizeFeedKey(legacyFeed);
+        if (!key) continue;
+        if (!feedOwners.has(key)) {
+          feedOwners.set(key, new Set<number>());
+        }
+        feedOwners.get(key)?.add(row.deviceID);
+      }
+    }
+
+    const conflictDetails = [requestedFeed]
+      .filter((feed) => feedOwners.has(feed))
+      .map((feed) => ({
+        feed,
+        deviceIDs: Array.from(feedOwners.get(feed) ?? []),
+      }));
+
+    if (conflictDetails.length > 0) {
+      throw new ConflictException({
+        message: 'Feed key đã được gán cho thiết bị khác.',
+        conflicts: conflictDetails,
+      });
+    }
   }
 
   private mapDeviceResponse<
@@ -57,16 +120,17 @@ export class DevicesService {
       metaData: Prisma.JsonValue | null;
     },
   >(device: T): T & { sensorFeeds: string[] } {
+    const singleFeed = this.pickSingleFeed(device.mqttTopicSensor);
     return {
       ...device,
-      sensorFeeds: this.extractSensorFeedsFromDevice(device),
+      sensorFeeds: singleFeed ? [singleFeed] : [],
     };
   }
 
   private normalizeMetaData(
     existing: Prisma.JsonValue | null | undefined,
     next: Partial<CreateDeviceDto>,
-    sensorFeeds: string[],
+    feedKey: string,
   ): Prisma.InputJsonValue {
     const base =
       next.metaData !== undefined
@@ -77,7 +141,7 @@ export class DevicesService {
 
     return {
       ...base,
-      sensorFeeds,
+      feedKey,
     } as Prisma.InputJsonValue;
   }
 
@@ -85,27 +149,14 @@ export class DevicesService {
     const rows = await this.prisma.device.findMany({
       select: {
         mqttTopicSensor: true,
-        metaData: true,
       },
     });
 
     const feeds = new Set<string>();
 
     for (const row of rows) {
-      for (const feed of this.splitFeedText(row.mqttTopicSensor)) {
-        feeds.add(feed);
-      }
-
-      const meta = row.metaData;
-      if (!meta || typeof meta !== 'object' || Array.isArray(meta)) continue;
-
-      const sensorFeeds = (meta as { sensorFeeds?: unknown }).sensorFeeds ?? [];
-      if (!Array.isArray(sensorFeeds)) continue;
-
-      for (const feed of sensorFeeds) {
-        const normalized = String(feed ?? '').trim();
-        if (normalized) feeds.add(normalized);
-      }
+      const feed = this.pickSingleFeed(row.mqttTopicSensor);
+      if (feed) feeds.add(feed);
     }
 
     this.mqttService.subscribeToFeeds(Array.from(feeds));
@@ -149,35 +200,76 @@ export class DevicesService {
     return fields.some((field) => String(field).includes('DeviceID'));
   }
 
+  private async attachZonesByZoneId<
+    T extends {
+      zoneID?: number | null;
+    },
+  >(
+    rows: T[],
+  ): Promise<
+    Array<T & { zone: { zoneID: number; zoneName: string | null } | null }>
+  > {
+    const zoneIds = Array.from(
+      new Set(
+        rows
+          .map((row) => row.zoneID)
+          .filter((zoneID): zoneID is number => typeof zoneID === 'number'),
+      ),
+    );
+
+    if (zoneIds.length === 0) {
+      return rows.map((row) => ({ ...row, zone: null }));
+    }
+
+    const zones = await this.prisma.zone.findMany({
+      where: { zoneID: { in: zoneIds } },
+      select: { zoneID: true, zoneName: true },
+    });
+
+    const zoneMap = new Map(zones.map((zone) => [zone.zoneID, zone]));
+
+    return rows.map((row) => ({
+      ...row,
+      zone:
+        typeof row.zoneID === 'number'
+          ? (zoneMap.get(row.zoneID) ?? null)
+          : null,
+    }));
+  }
+
   findAll() {
     return this.prisma.device
       .findMany({
-        include: { zone: { select: { zoneID: true, zoneName: true } } },
         orderBy: { deviceID: 'asc' },
       })
+      .then((rows) => this.attachZonesByZoneId(rows))
       .then((rows) => rows.map((row) => this.mapDeviceResponse(row)));
   }
 
   async findOne(id: number) {
     const device = await this.prisma.device.findUnique({
       where: { deviceID: id },
-      include: { zone: { select: { zoneID: true, zoneName: true } } },
     });
     if (!device) throw new NotFoundException(`Device ${id} not found`);
-    return this.mapDeviceResponse(device);
+
+    const [withZone] = await this.attachZonesByZoneId([device]);
+    return this.mapDeviceResponse(withZone);
   }
 
   async create(dto: CreateDeviceDto) {
-    const sensorFeeds = this.extractSensorFeeds(dto);
+    await this.assertNoFeedConflicts(dto);
+    const feedKey = this.assertSingleFeedFormat(dto.mqttTopicSensor);
+    if (!feedKey) {
+      throw new BadRequestException('Thiết bị phải có đúng 1 feed key.');
+    }
     const payload = {
       deviceName: dto.deviceName,
       deviceStatus: dto.deviceStatus,
       deviceType: dto.deviceType,
-      mqttTopicSensor:
-        sensorFeeds.length > 0 ? sensorFeeds.join(',') : dto.mqttTopicSensor,
-      mqttTopicCmd: dto.mqttTopicCmd,
+      mqttTopicSensor: feedKey || null,
+      mqttTopicCmd: null,
       zoneID: dto.zoneID,
-      metaData: this.normalizeMetaData(undefined, dto, sensorFeeds),
+      metaData: this.normalizeMetaData(undefined, dto, feedKey),
     };
 
     let created;
@@ -196,22 +288,37 @@ export class DevicesService {
     return this.findOne(created.deviceID);
   }
 
+  async validateFeedConflicts(
+    dto: {
+      mqttTopicSensor?: string;
+    },
+    currentDeviceId?: number,
+  ) {
+    await this.assertNoFeedConflicts(dto, currentDeviceId);
+    return { ok: true };
+  }
+
   async update(id: number, dto: Partial<CreateDeviceDto>) {
     const current = await this.findOne(id);
-    const sensorFeeds = this.extractSensorFeeds(dto);
+    const requestedSensorUpdate = dto.mqttTopicSensor !== undefined;
+    const nextFeedKey = requestedSensorUpdate
+      ? this.assertSingleFeedFormat(dto.mqttTopicSensor)
+      : this.pickSingleFeed(current.mqttTopicSensor);
 
-    const requestedFeedUpdate =
-      dto.sensorFeeds !== undefined || dto.mqttTopicSensor !== undefined;
-    if (requestedFeedUpdate && sensorFeeds.length === 0) {
-      const deleted = await this.prisma.device.delete({
-        where: { deviceID: id },
-      });
-      await this.refreshMqttSubscriptionsFromDevices();
-      return {
-        ...this.mapDeviceResponse(deleted),
-        deletedBecauseNoSensors: true,
-      };
+    if (requestedSensorUpdate) {
+      await this.assertNoFeedConflicts(
+        {
+          mqttTopicSensor: nextFeedKey,
+        },
+        id,
+      );
     }
+
+    const nextMetaData = this.normalizeMetaData(
+      current.metaData,
+      dto,
+      nextFeedKey,
+    );
 
     const updated = await this.prisma.device.update({
       where: { deviceID: id },
@@ -219,17 +326,17 @@ export class DevicesService {
         deviceName: dto.deviceName,
         deviceStatus: dto.deviceStatus,
         deviceType: dto.deviceType,
-        mqttTopicSensor:
-          sensorFeeds.length > 0 ? sensorFeeds.join(',') : dto.mqttTopicSensor,
-        mqttTopicCmd: dto.mqttTopicCmd,
+        mqttTopicSensor: requestedSensorUpdate
+          ? nextFeedKey || null
+          : undefined,
+        mqttTopicCmd: null,
         zoneID: dto.zoneID,
-        metaData: this.normalizeMetaData(current.metaData, dto, sensorFeeds),
+        metaData: nextMetaData,
       },
     });
 
     const topicChanged = dto.mqttTopicSensor !== undefined;
-    const feedsChanged = dto.sensorFeeds !== undefined;
-    if (topicChanged || feedsChanged) {
+    if (topicChanged) {
       await this.refreshMqttSubscriptionsFromDevices();
     }
 

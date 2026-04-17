@@ -10,9 +10,10 @@ import {
   Layout, Menu, Typography, Avatar, Space, App, Button, Badge, Tooltip,
 } from 'antd';
 import {
-  UserSwitchOutlined, GlobalOutlined, ApiOutlined, SettingOutlined,
-  FileTextOutlined, LogoutOutlined, UserOutlined,
+  UserSwitchOutlined, SettingOutlined,
+  FileTextOutlined, LogoutOutlined, UserOutlined, ApartmentOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, WifiOutlined, DisconnectOutlined,
+  DeploymentUnitOutlined,
 } from '@ant-design/icons';
 import NotificationCenter from '@/features/notifications/ui/NotificationCenter';
 import { clearAuthSession } from '@/shared/auth/session';
@@ -23,8 +24,8 @@ const { Text } = Typography;
 
 const MENU_ITEMS = [
   { key: '/admin/users',      icon: <UserSwitchOutlined />, label: 'Quản lý Người dùng'    },
-  { key: '/admin/zones',      icon: <GlobalOutlined />,     label: 'Quản lý Khu vực'       },
-  { key: '/admin/devices',    icon: <ApiOutlined />,        label: 'Cấu hình Thiết bị IoT' },
+  { key: '/admin/zones',      icon: <DeploymentUnitOutlined />, label: 'Quản lý Zone'      },
+  { key: '/admin/chambers',   icon: <ApartmentOutlined />,  label: 'Quản lý Buồng sấy'      },
   { key: '/admin/thresholds', icon: <SettingOutlined />,    label: 'Thiết lập Ngưỡng'      },
   { key: '/admin/logs',       icon: <FileTextOutlined />,   label: 'Nhật ký Hệ thống'      },
 ];

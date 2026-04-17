@@ -14,7 +14,7 @@ import {
   MailOutlined, LockOutlined, CheckCircleOutlined, StopOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import { usersApi, ApiUser } from '@/shared/lib/api';
+import { usersApi, ApiUser, zonesApi, ApiZone } from '@/shared/lib/api';
 
 const { Title, Text } = Typography;
 
@@ -34,17 +34,25 @@ function displayName(u: ApiUser) {
 export default function UserManagementPage() {
   const { message, modal } = App.useApp();
   const [users, setUsers] = useState<ApiUser[]>([]);
+  const [zones, setZones] = useState<ApiZone[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<ApiUser | null>(null);
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
+  const selectedRole = Form.useWatch('role', form) as UserRole | undefined;
   const [search, setSearch] = useState('');
+  const [roleFilter, setRoleFilter] = useState<'all' | UserRole>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'Active' | 'Inactive'>('all');
 
   const loadUsers = async () => {
     try {
-      const data = await usersApi.getAll();
+      const [data, zoneRows] = await Promise.all([
+        usersApi.getAll(),
+        zonesApi.getAll(),
+      ]);
       setUsers(data);
+      setZones(zoneRows);
     } catch {
       message.error('Không thể tải danh sách người dùng.');
     } finally {
@@ -58,8 +66,18 @@ export default function UserManagementPage() {
     const name = displayName(u).toLowerCase();
     const email = (u.email ?? '').toLowerCase();
     const q = search.toLowerCase();
+
+    if (roleFilter !== 'all' && u.role !== roleFilter) return false;
+    if (statusFilter !== 'all' && u.status !== statusFilter) return false;
+
     return name.includes(q) || email.includes(q);
   });
+
+  const clearFilters = () => {
+    setSearch('');
+    setRoleFilter('all');
+    setStatusFilter('all');
+  };
 
   const openCreate = () => {
     setEditingUser(null);
@@ -74,6 +92,7 @@ export default function UserManagementPage() {
       lastName: user.lastName,
       email: user.email,
       role: user.role,
+      zoneIDs: user.zones?.map((z) => z.zoneID) ?? [],
     });
     setModalOpen(true);
   };
@@ -82,11 +101,20 @@ export default function UserManagementPage() {
     try {
       const values = await form.validateFields();
       setSaving(true);
+      const payload = {
+        ...values,
+        // Backend đang dùng field chamberIDs cho danh sách zone gán operator.
+        chamberIDs:
+          values.role === 'Operator'
+            ? (Array.isArray(values.zoneIDs) ? values.zoneIDs : [])
+            : [],
+      };
+
       if (editingUser) {
-        await usersApi.update(editingUser.userID, values);
+        await usersApi.update(editingUser.userID, payload);
         message.success('Đã cập nhật thông tin người dùng.');
       } else {
-        await usersApi.create(values);
+        await usersApi.create(payload);
         message.success(`Tài khoản đã được tạo.`);
       }
       setModalOpen(false);
@@ -178,12 +206,12 @@ export default function UserManagementPage() {
       },
     },
     {
-      title: 'Khu vực phụ trách',
+      title: 'Zone phụ trách',
       key: 'zones',
       render: (_, r) => {
         const zones = r.zones ?? [];
         return zones.length === 0
-          ? <Text type="secondary" style={{ fontSize: 12 }}>Tất cả (Admin)</Text>
+          ? <Text type="secondary" style={{ fontSize: 12 }}>{r.role === 'Operator' ? 'Chưa gán zone' : 'Toàn nhà máy'}</Text>
           : zones.map(z => (
               <Tag key={z.zoneID} color="blue" style={{ borderRadius: 10, margin: '2px 3px 2px 0' }}>
                 {z.zoneName}
@@ -256,11 +284,35 @@ export default function UserManagementPage() {
             style={{ width: 240 }}
             allowClear
           />
+          <Select
+            value={roleFilter}
+            onChange={(value) => setRoleFilter(value)}
+            style={{ width: 150 }}
+            options={[
+              { value: 'all', label: 'Tất cả vai trò' },
+              ...ROLES.map((role) => ({ value: role, label: role })),
+            ]}
+          />
+          <Select
+            value={statusFilter}
+            onChange={(value) => setStatusFilter(value)}
+            style={{ width: 160 }}
+            options={[
+              { value: 'all', label: 'Tất cả trạng thái' },
+              { value: 'Active', label: 'Active' },
+              { value: 'Inactive', label: 'Inactive' },
+            ]}
+          />
+          <Button onClick={clearFilters}>Xóa lọc</Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate} style={{ borderRadius: 8 }}>
             Thêm người dùng
           </Button>
         </Space>
       </div>
+
+      <Text type="secondary" style={{ display: 'block', marginBottom: 10 }}>
+        Hiển thị {filtered.length}/{users.length} người dùng
+      </Text>
 
       {/* Stats */}
       <div style={{ display: 'flex', gap: 12, marginBottom: 18, flexWrap: 'wrap' }}>
@@ -364,6 +416,22 @@ export default function UserManagementPage() {
               options={ROLES.map(r => ({ value: r, label: r }))}
             />
           </Form.Item>
+          {selectedRole === 'Operator' ? (
+            <Form.Item
+              name="zoneIDs"
+              label="Zone phụ trách"
+              rules={[{ required: true, type: 'array', min: 1, message: 'Chọn ít nhất 1 zone cho Operator.' }]}
+            >
+              <Select
+                mode="multiple"
+                placeholder="Chọn zone cho Operator"
+                options={zones.map((zone) => ({
+                  value: zone.zoneID,
+                  label: zone.zoneName || `Zone ${zone.zoneID}`,
+                }))}
+              />
+            </Form.Item>
+          ) : null}
         </Form>
       </Modal>
     </div>

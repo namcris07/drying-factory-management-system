@@ -284,8 +284,8 @@ export default function DashboardPage() {
               onChange={setZone}
               style={{ width: 140 }}
               options={[
-                { value: 'all', label: 'Tất cả khu vực' },
-                { value: 'zoneA', label: 'Zone A' },
+                { value: 'all', label: 'Toàn nhà máy' },
+                { value: 'zoneA', label: 'Buồng sấy A' },
               ]}
             />
             <Button type="primary" icon={<ExportOutlined />} onClick={() => router.push('/manager/reports')}>

@@ -198,10 +198,10 @@ export default function ReportsPage() {
             />
           </div>
           <div>
-            <Text type="secondary" style={{ display: 'block', marginBottom: 4 }}>Khu vực</Text>
+            <Text type="secondary" style={{ display: 'block', marginBottom: 4 }}>Phạm vi</Text>
             <Select value={zone} onChange={(v) => setZone(v)} style={{ width: 160 }}>
-              <Select.Option value="all">Tất cả khu vực</Select.Option>
-              <Select.Option value="zoneA">Zone A</Select.Option>
+              <Select.Option value="all">Toàn nhà máy</Select.Option>
+              <Select.Option value="zoneA">Buồng sấy A</Select.Option>
             </Select>
           </div>
           <div>

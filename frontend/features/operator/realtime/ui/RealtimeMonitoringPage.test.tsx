@@ -47,8 +47,8 @@ describe('RealtimeMonitoringPage', () => {
   it('renders dynamic sensor tags from machine sensorState', async () => {
     render(<RealTimeMonitoringPage />);
 
-    expect(await screen.findByText(/Nhiet do:/i)).toBeTruthy();
-    expect(await screen.findByText(/Do am:/i)).toBeTruthy();
+    expect(await screen.findByText(/Nhiệt độ:/i)).toBeTruthy();
+    expect(await screen.findByText(/Độ ẩm:/i)).toBeTruthy();
     expect(await screen.findByText(/m-a1\/vibration:/i)).toBeTruthy();
   });
 });

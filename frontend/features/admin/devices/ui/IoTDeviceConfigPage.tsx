@@ -36,20 +36,12 @@ export default function IoTDeviceConfigPage() {
   const [editingDevice, setEditingDevice] = useState<ApiDevice | null>(null);
 
   const parseSensorFeeds = (device: ApiDevice) => {
-    const fromMeta = Array.isArray(device.metaData?.sensorFeeds)
-      ? (device.metaData?.sensorFeeds as unknown[])
-      : [];
-
-    const normalizedMeta = fromMeta
-      .map((item) => String(item ?? '').trim())
-      .filter(Boolean);
-
     const fromText = String(device.mqttTopicSensor ?? '')
       .split(/[\n,;]/)
       .map((item) => item.trim())
       .filter(Boolean);
 
-    return Array.from(new Set([...normalizedMeta, ...fromText]));
+    return fromText.length > 0 ? [fromText[0]] : [];
   };
 
   const loadData = async () => {
@@ -76,10 +68,9 @@ export default function IoTDeviceConfigPage() {
     setEditingDevice(null);
     form.setFieldsValue({
       deviceName: '',
-      deviceType: 'Dryer',
+      deviceType: 'TemperatureSensor',
       deviceStatus: 'Active',
-      sensorFeeds: [],
-      mqttTopicCmd: '',
+      mqttTopicSensor: '',
       zoneID: undefined,
     });
     setOpenModal(true);
@@ -89,10 +80,9 @@ export default function IoTDeviceConfigPage() {
     setEditingDevice(device);
     form.setFieldsValue({
       deviceName: device.deviceName ?? '',
-      deviceType: device.deviceType ?? 'Dryer',
+      deviceType: device.deviceType ?? 'TemperatureSensor',
       deviceStatus: device.deviceStatus ?? 'Active',
-      sensorFeeds: parseSensorFeeds(device),
-      mqttTopicCmd: device.mqttTopicCmd ?? '',
+      mqttTopicSensor: parseSensorFeeds(device)[0] ?? '',
       zoneID: device.zoneID ?? undefined,
     });
     setOpenModal(true);
@@ -103,37 +93,31 @@ export default function IoTDeviceConfigPage() {
       const values = await form.validateFields();
       setSaving(true);
 
-      const sensorFeeds: string[] = Array.from(
-        new Set(
-          (Array.isArray(values.sensorFeeds) ? values.sensorFeeds : [])
-            .map((item: unknown) => String(item ?? '').trim())
-            .filter(Boolean),
-        ),
-      );
+      const feedCandidates = String(values.mqttTopicSensor ?? '')
+        .split(/[\n,;]/)
+        .map((item) => String(item ?? '').trim())
+        .filter(Boolean);
+
+      if (feedCandidates.length !== 1) {
+        message.warning('Thiết bị phải có đúng 1 feed key.');
+        return;
+      }
+
+      const mqttTopicSensor = feedCandidates[0];
 
       const payload = {
         deviceName: String(values.deviceName ?? '').trim(),
         deviceType: String(values.deviceType ?? '').trim() || undefined,
         deviceStatus: String(values.deviceStatus ?? '').trim() || undefined,
-        mqttTopicCmd: String(values.mqttTopicCmd ?? '').trim() || undefined,
         zoneID: values.zoneID,
-        sensorFeeds,
-        mqttTopicSensor: sensorFeeds.join(','),
+        mqttTopicSensor,
+        metaData: { feedKey: mqttTopicSensor },
       };
 
       if (editingDevice) {
-        if (sensorFeeds.length === 0) {
-          await devicesApi.remove(editingDevice.deviceID);
-          message.success('Đã xóa thiết bị vì không còn cảm biến nào được cấu hình.');
-        } else {
-          await devicesApi.update(editingDevice.deviceID, payload);
-          message.success('Đã cập nhật thiết bị và danh sách topic cảm biến.');
-        }
+        await devicesApi.update(editingDevice.deviceID, payload);
+        message.success('Đã cập nhật thiết bị.');
       } else {
-        if (sensorFeeds.length === 0) {
-          message.warning('Thiết bị mới cần ít nhất 1 cảm biến.');
-          return;
-        }
         await devicesApi.create(payload);
         message.success('Đã tạo thiết bị mới.');
       }
@@ -255,17 +239,19 @@ export default function IoTDeviceConfigPage() {
           </Form.Item>
 
           <Space style={{ width: '100%' }} size={12}>
-            <Form.Item label="Loại thiết bị" name="deviceType" style={{ width: 180 }}>
+            <Form.Item label="Loại thiết bị" name="deviceType" style={{ width: 150 }}>
               <Select
                 options={[
-                  { value: 'Dryer', label: 'Dryer' },
-                  { value: 'SensorHub', label: 'SensorHub' },
-                  { value: 'Custom', label: 'Custom' },
+                      { value: 'TemperatureSensor', label: 'TemperatureSensor' },
+                      { value: 'HumiditySensor', label: 'HumiditySensor' },
+                      { value: 'Fan', label: 'Fan' },
+                      { value: 'Led', label: 'Led' },
+                      { value: 'Lcd', label: 'Lcd' },
                 ]}
               />
             </Form.Item>
 
-            <Form.Item label="Trạng thái" name="deviceStatus" style={{ width: 180 }}>
+            <Form.Item label="Trạng thái" name="deviceStatus" style={{ width: 150 }}>
               <Select
                 options={[
                   { value: 'Active', label: 'Active' },
@@ -275,7 +261,7 @@ export default function IoTDeviceConfigPage() {
               />
             </Form.Item>
 
-            <Form.Item label="Zone" name="zoneID" style={{ width: 220 }}>
+            <Form.Item label="Zone" name="zoneID" style={{ width: 100 }}>
               <Select
                 allowClear
                 placeholder="Chọn zone"
@@ -288,23 +274,11 @@ export default function IoTDeviceConfigPage() {
           </Space>
 
           <Form.Item
-            label="Danh sách topic cảm biến MQTT"
-            name="sensorFeeds"
-            extra="Nhập nhiều topic (ví dụ: m-a1-temperature, m-a1-humidity, m-a1-light)."
+            label="MQTT feed key"
+            name="mqttTopicSensor"
+            extra="Chỉ nhập một feed key duy nhất cho thiết bị."
           >
-            <Select
-              mode="tags"
-              tokenSeparators={[',', ';', ' ']}
-              placeholder="Nhập topic và nhấn Enter"
-            />
-          </Form.Item>
-
-          <Form.Item
-            label="MQTT topic command"
-            name="mqttTopicCmd"
-            extra="Ví dụ: m-a1-cmd hoặc drytech.m-a1-command"
-          >
-            <Input placeholder="Topic điều khiển cho thiết bị" />
+            <Input placeholder="Ví dụ: drytech.m-a1-temp-1" />
           </Form.Item>
         </Form>
       </Modal>

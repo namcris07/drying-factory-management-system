@@ -115,17 +115,17 @@ export function OperatingModeToggle({
         <div className="flex items-center gap-2">
           <div
             className={`w-3 h-3 rounded-full transition-colors ${
-              isAuto ? 'bg-green-500' : 'bg-yellow-500'
+              isAuto ? 'bg-green-500' : 'bg-gray-400'
             }`}
           />
           <span className="text-xs font-medium text-gray-600">
-            {isAuto ? 'Tự động' : 'Thủ công'}
+            Tự động: {isAuto ? 'Bật' : 'Tắt'}
           </span>
         </div>
         <Switch
-          checked={!isAuto}
+          checked={isAuto}
           onCheckedChange={(checked) => {
-            handleModeChange(checked ? 'manual' : 'auto');
+            handleModeChange(checked ? 'auto' : 'manual');
           }}
           disabled={isLoading}
           className="ml-2"

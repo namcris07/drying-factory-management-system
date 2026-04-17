@@ -52,6 +52,44 @@ export class BatchesService implements OnModuleInit, OnModuleDestroy {
     this.stageTimers.clear();
   }
 
+  private async syncBatchIdSequence() {
+    await this.prisma.$executeRawUnsafe(`
+      SELECT setval(
+        pg_get_serial_sequence('"Batches"', 'BatchesID'),
+        COALESCE((SELECT MAX("BatchesID") FROM "Batches"), 0) + 1,
+        false
+      );
+    `);
+  }
+
+  private isBatchPrimaryKeyConflict(error: unknown): boolean {
+    if (!error || typeof error !== 'object') return false;
+
+    const maybeError = error as {
+      code?: string;
+      meta?: {
+        target?: unknown;
+        driverAdapterError?: {
+          cause?: { constraint?: { fields?: string[] } };
+        };
+      };
+    };
+
+    if (maybeError.code !== 'P2002') return false;
+
+    const target = maybeError.meta?.target;
+    if (
+      Array.isArray(target) &&
+      target.some((t) => String(t).includes('BatchesID'))
+    ) {
+      return true;
+    }
+
+    const fields =
+      maybeError.meta?.driverAdapterError?.cause?.constraint?.fields ?? [];
+    return fields.some((field) => String(field).includes('BatchesID'));
+  }
+
   async findAll(query: BatchListQuery = {}) {
     const page = Math.max(1, Number(query.page ?? 1));
     const pageSize = Math.min(100, Math.max(1, Number(query.pageSize ?? 10)));
@@ -239,12 +277,14 @@ export class BatchesService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
-    const created = await this.prisma.batch.create({
+    const resolvedDeviceID = await this.resolveBatchDeviceId(dto);
+
+    const createPayload = {
       data: {
         batchStatus: dto.batchStatus ?? 'Running',
         operationMode: dto.operationMode ?? 'auto',
         recipeID: dto.recipeID,
-        deviceID: dto.deviceID,
+        deviceID: resolvedDeviceID,
         startedAt: startAt,
         stageStartedAt: startAt,
         currentStage: recipe.stages[0].stageOrder,
@@ -253,7 +293,19 @@ export class BatchesService implements OnModuleInit, OnModuleDestroy {
         recipe: { select: { recipeID: true, recipeName: true } },
         device: { select: { deviceID: true, deviceName: true } },
       },
-    });
+    };
+
+    let created;
+    try {
+      created = await this.prisma.batch.create(createPayload);
+    } catch (error) {
+      if (!this.isBatchPrimaryKeyConflict(error)) {
+        throw error;
+      }
+
+      await this.syncBatchIdSequence();
+      created = await this.prisma.batch.create(createPayload);
+    }
 
     await this.prisma.batchOperation.create({
       data: {
@@ -265,6 +317,37 @@ export class BatchesService implements OnModuleInit, OnModuleDestroy {
     await this.synchronizeBatchProgress(created.batchesID);
 
     return this.findOne(created.batchesID);
+  }
+
+  private async resolveBatchDeviceId(dto: CreateBatchDto): Promise<number> {
+    if (typeof dto.deviceID === 'number' && Number.isInteger(dto.deviceID)) {
+      return dto.deviceID;
+    }
+
+    if (typeof dto.chamberID !== 'number' || !Number.isInteger(dto.chamberID)) {
+      throw new BadRequestException(
+        'Cần truyền deviceID hoặc chamberID để tạo mẻ sấy.',
+      );
+    }
+
+    const chamberDevice = await this.prisma.device.findFirst({
+      where: {
+        deviceID: dto.chamberID,
+        deviceType: {
+          equals: 'DryingChamber',
+          mode: 'insensitive',
+        },
+      },
+      select: { deviceID: true },
+    });
+
+    if (!chamberDevice) {
+      throw new BadRequestException(
+        `Buồng sấy ${dto.chamberID} không tồn tại hoặc không hợp lệ.`,
+      );
+    }
+
+    return chamberDevice.deviceID;
   }
 
   async update(id: number, dto: UpdateBatchDto) {
@@ -479,14 +562,15 @@ export class BatchesService implements OnModuleInit, OnModuleDestroy {
     deviceId: number | null;
     deviceName: string | null;
   }) {
-    const tempFeed = await this.getConfigOrDefault(
-      'temperatureSetpointFeed',
-      'temperature_setpoint',
-    );
-    const humFeed = await this.getConfigOrDefault(
-      'humiditySetpointFeed',
-      'humidity_setpoint',
-    );
+    const tempFeed = await this.getConfigValue('temperatureSetpointFeed');
+    const humFeed = await this.getConfigValue('humiditySetpointFeed');
+
+    if (!tempFeed || !humFeed) {
+      this.logger.warn(
+        `Batch ${params.batchId}: Bo qua publish setpoint MQTT vi chua cau hinh temperatureSetpointFeed/humiditySetpointFeed.`,
+      );
+      return;
+    }
 
     try {
       const [tempResult, humResult] = await Promise.all([
@@ -547,12 +631,12 @@ export class BatchesService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async getConfigOrDefault(key: string, fallback: string) {
+  private async getConfigValue(key: string) {
     const row = await this.prisma.systemConfig.findUnique({
       where: { configKey: key },
       select: { configValue: true },
     });
     const value = row?.configValue?.trim();
-    return value || fallback;
+    return value || null;
   }
 }

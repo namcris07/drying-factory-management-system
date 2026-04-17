@@ -40,7 +40,7 @@ describe('OperatingModeToggle', () => {
     render(<OperatingModeToggle />);
 
     await waitFor(() => {
-      expect(screen.getByText('Tự động')).toBeTruthy();
+      expect(screen.getByText(/Tự động:\s*Bật/i)).toBeTruthy();
     });
 
     const switchButton = screen.getByRole('switch');

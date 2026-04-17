@@ -11,6 +11,44 @@ import { CreateRecipeDto } from './dto/create-recipe.dto';
 export class RecipesService {
   constructor(private prisma: PrismaService) {}
 
+  private async syncRecipeIdSequence() {
+    await this.prisma.$executeRawUnsafe(`
+      SELECT setval(
+        pg_get_serial_sequence('"Recipes"', 'RecipeID'),
+        COALESCE((SELECT MAX("RecipeID") FROM "Recipes"), 0) + 1,
+        false
+      );
+    `);
+  }
+
+  private isRecipePrimaryKeyConflict(error: unknown): boolean {
+    if (!error || typeof error !== 'object') return false;
+
+    const maybeError = error as {
+      code?: string;
+      meta?: {
+        target?: unknown;
+        driverAdapterError?: {
+          cause?: { constraint?: { fields?: string[] } };
+        };
+      };
+    };
+
+    if (maybeError.code !== 'P2002') return false;
+
+    const target = maybeError.meta?.target;
+    if (
+      Array.isArray(target) &&
+      target.some((t) => String(t).includes('RecipeID'))
+    ) {
+      return true;
+    }
+
+    const fields =
+      maybeError.meta?.driverAdapterError?.cause?.constraint?.fields ?? [];
+    return fields.some((field) => String(field).includes('RecipeID'));
+  }
+
   private readonly recipeInclude: Prisma.RecipeInclude = {
     steps: { orderBy: { stepNo: 'asc' as const } },
     stages: { orderBy: { stageOrder: 'asc' as const } },
@@ -50,11 +88,13 @@ export class RecipesService {
     if (
       !Number.isFinite(stageOrder) ||
       !Number.isFinite(durationMinutes) ||
+      stageOrder <= 0 ||
+      durationMinutes <= 0 ||
       !Number.isFinite(temperatureSetpoint) ||
       !Number.isFinite(humiditySetpoint)
     ) {
       throw new BadRequestException(
-        `stages[${index}] must include numeric stageOrder, durationMinutes, temperatureSetpoint, humiditySetpoint`,
+        `stages[${index}] must include positive stageOrder, positive durationMinutes, numeric temperatureSetpoint, humiditySetpoint`,
       );
     }
 
@@ -64,6 +104,18 @@ export class RecipesService {
       temperatureSetpoint,
       humiditySetpoint,
     };
+  }
+
+  private sumStageDurationMinutes(
+    stages: Array<{
+      durationMinutes: number;
+    }>,
+  ) {
+    const total = stages.reduce(
+      (sum, stage) => sum + Number(stage.durationMinutes || 0),
+      0,
+    );
+    return Math.max(1, Math.round(total || 0));
   }
 
   async findAll(includeInactive = false) {
@@ -110,10 +162,15 @@ export class RecipesService {
                 Number.isFinite(s.temperatureSetpoint) &&
                 Number.isFinite(s.humiditySetpoint),
             );
+    const resolvedDuration =
+      derivedStages.length > 0
+        ? this.sumStageDurationMinutes(derivedStages)
+        : recipeData.timeDurationEst;
 
-    const created = await this.prisma.recipe.create({
+    const payload = {
       data: {
         ...recipeData,
+        timeDurationEst: resolvedDuration,
         steps: steps
           ? {
               create: steps.map((s, i) => ({
@@ -135,7 +192,19 @@ export class RecipesService {
             : undefined,
       },
       include: this.recipeInclude,
-    });
+    } as const;
+
+    let created;
+    try {
+      created = await this.prisma.recipe.create(payload);
+    } catch (error) {
+      if (!this.isRecipePrimaryKeyConflict(error)) {
+        throw error;
+      }
+
+      await this.syncRecipeIdSequence();
+      created = await this.prisma.recipe.create(payload);
+    }
 
     return this.toRecipeResponse(created as Record<string, unknown>);
   }
@@ -158,14 +227,20 @@ export class RecipesService {
     void steps;
 
     if (stages && stages.length > 0) {
+      const normalizedStages = stages.map((stage, i) =>
+        this.normalizeStageInput(stage, i),
+      );
+
       await this.prisma.recipeStage.deleteMany({ where: { recipeID: id } });
 
       await this.prisma.recipeStage.createMany({
-        data: stages.map((stage, i) => ({
-          ...this.normalizeStageInput(stage, i),
+        data: normalizedStages.map((stage) => ({
+          ...stage,
           recipeID: id,
         })),
       });
+
+      data.timeDurationEst = this.sumStageDurationMinutes(normalizedStages);
     }
 
     const updated = await this.prisma.recipe.update({

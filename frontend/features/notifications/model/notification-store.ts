@@ -43,6 +43,11 @@ function toSeverity(type: string | null): NotifSeverity {
 
 function toAlertTitle(alert: ApiAlert): string {
   const device = alert.device?.deviceName?.trim();
+  const sensorMatch = alert.alertMessage?.match(/Cảm biến\s+(.+?)\s+(?:vượt ngưỡng|đã trở về|trở về|đạt lại)/i);
+  const sensor = sensorMatch?.[1]?.trim();
+
+  if (device && sensor) return `Cảnh báo ${device} · ${sensor}`;
+  if (sensor) return `Cảnh báo ${sensor}`;
   if (device) return `Cảnh báo thiết bị ${device}`;
   return 'Cảnh báo hệ thống máy sấy';
 }

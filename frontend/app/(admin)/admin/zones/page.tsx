@@ -1,1 +1,1 @@
-export { default } from "@/features/admin/zones/ui/ZoneManagementPage";
+export { default } from '@/features/admin/zones/ui/ZoneManagementPage';

@@ -1,4 +1,5 @@
-import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsInt, IsNotEmpty, IsOptional, IsString, Min } from 'class-validator';
 
 export class ResolveAlertDto {
   @IsNotEmpty()
@@ -10,6 +11,9 @@ export class ResolveAlertDto {
   resolveNote?: string;
 
   @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
   userID?: number;
 }
 

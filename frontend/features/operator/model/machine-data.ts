@@ -8,6 +8,9 @@ export interface Machine {
   deviceID?: number;
   name: string;
   zone: string;
+  zoneID?: number;
+  deviceType?: string;
+  deviceStatusRaw?: string;
   status: 'Running' | 'Idle' | 'Error' | 'Maintenance';
   recipe?: string;
   recipeId?: number;

@@ -12,7 +12,7 @@ import {
 } from 'antd';
 import {
   DashboardOutlined, BookOutlined, HistoryOutlined,
-  FileTextOutlined, BarChartOutlined, UserOutlined,
+  FileTextOutlined, UserOutlined,
   LogoutOutlined, MenuFoldOutlined, MenuUnfoldOutlined,
 } from '@ant-design/icons';
 import NotificationCenter from '@/features/notifications/ui/NotificationCenter';
@@ -26,13 +26,12 @@ const MENU_ITEMS = [
   {
     key: 'main',
     type: 'group' as const,
-    label: <span style={{ fontSize: 10, letterSpacing: 1.2, color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase' }}>Quản lý & Phân tích</span>,
+    label: <span style={{ fontSize: 10, letterSpacing: 1.2, color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase' }}>Quản lý toàn nhà máy</span>,
     children: [
-      { key: '/manager', icon: <DashboardOutlined />, label: 'Dashboard KPI'        },
+      { key: '/manager', icon: <DashboardOutlined />, label: 'Dashboard nhà máy'    },
       { key: '/recipes', icon: <BookOutlined />,      label: 'Thư viện Công thức'   },
-      { key: '/batches', icon: <HistoryOutlined />,   label: 'Lịch sử Mẻ sấy'      },
-      { key: '/reports', icon: <FileTextOutlined />,  label: 'Xuất Báo cáo'         },
-      { key: '/ai',      icon: <BarChartOutlined />,  label: 'Phân tích Hiệu suất'  },
+      { key: '/batches', icon: <HistoryOutlined />,   label: 'Mẻ sấy toàn nhà máy'  },
+      { key: '/reports', icon: <FileTextOutlined />,  label: 'Báo cáo toàn nhà máy' },
     ],
   },
 ];
@@ -67,7 +66,7 @@ function MainLayoutInner({ children }: MainLayoutProps) {
   ];
 
   const selectedKey  = pathname === '/' ? '/manager' : pathname;
-  const currentLabel = MENU_ITEMS[0].children.find(m => m.key === selectedKey)?.label || 'Dashboard KPI';
+  const currentLabel = MENU_ITEMS[0].children.find(m => m.key === selectedKey)?.label || 'Dashboard nhà máy';
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -87,6 +86,7 @@ function MainLayoutInner({ children }: MainLayoutProps) {
             <div style={{ lineHeight: 1.3 }}>
               <div style={{ color: '#fff', fontSize: 16, fontWeight: 700, whiteSpace: 'nowrap' }}>DryTech</div>
               <div style={{ color: '#69b1ff', fontSize: 10, fontWeight: 600, letterSpacing: 0.8 }}>MANAGER</div>
+              <div style={{ color: '#91caff', fontSize: 9, fontWeight: 600, letterSpacing: 0.8 }}>TOÀN NHÀ MÁY</div>
             </div>
           )}
         </div>

@@ -3,7 +3,6 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 type ConfigModule = typeof import('@/features/operator/adafruit/config/adafruit-config');
 
 const ENV_KEYS = [
-  'NEXT_PUBLIC_USE_SHARED_FEEDS',
   'NEXT_PUBLIC_FEED_TEMPERATURE',
   'NEXT_PUBLIC_FEED_HUMIDITY',
   'NEXT_PUBLIC_FEED_LIGHT',
@@ -51,45 +50,8 @@ describe('adafruitConfig', () => {
     vi.resetModules();
   });
 
-  it('normal: uses shared feed defaults when NEXT_PUBLIC_USE_SHARED_FEEDS is not false', async () => {
+  it('normal: builds machine-specific feed keys from machine id', async () => {
     const { getMachineFeeds } = await loadConfigModule();
-    const feeds = getMachineFeeds('M-A1');
-
-    expect(feeds).toEqual({
-      temperature: 'BBC_TEMP',
-      humidity: 'Humidity',
-      light: 'Lux',
-      fanLevel: 'fan_level',
-      led: 'BBC_LED',
-      lcd: 'lcd_text',
-    });
-  });
-
-  it('edge: shared mode honors feed overrides and ignores machine id format', async () => {
-    const { getMachineFeeds } = await loadConfigModule({
-      NEXT_PUBLIC_FEED_TEMPERATURE: 'TEMP_OVERRIDE',
-      NEXT_PUBLIC_FEED_HUMIDITY: 'HUM_OVERRIDE',
-      NEXT_PUBLIC_FEED_LIGHT: 'LIGHT_OVERRIDE',
-      NEXT_PUBLIC_FEED_FAN_LEVEL: 'FAN_LEVEL_OVERRIDE',
-      NEXT_PUBLIC_FEED_LED: 'LED_OVERRIDE',
-      NEXT_PUBLIC_FEED_LCD: 'LCD_OVERRIDE',
-    });
-    const feeds = getMachineFeeds(' MAY-KY-TU-DAC-BIET/#01 ');
-
-    expect(feeds).toEqual({
-      temperature: 'TEMP_OVERRIDE',
-      humidity: 'HUM_OVERRIDE',
-      light: 'LIGHT_OVERRIDE',
-      fanLevel: 'FAN_LEVEL_OVERRIDE',
-      led: 'LED_OVERRIDE',
-      lcd: 'LCD_OVERRIDE',
-    });
-  });
-
-  it('normal: builds machine-specific feed keys when NEXT_PUBLIC_USE_SHARED_FEEDS=false', async () => {
-    const { getMachineFeeds } = await loadConfigModule({
-      NEXT_PUBLIC_USE_SHARED_FEEDS: 'false',
-    });
     const feeds = getMachineFeeds('M-A1');
 
     expect(feeds).toEqual({
@@ -102,20 +64,51 @@ describe('adafruitConfig', () => {
     });
   });
 
-  it('edge: machine-specific mode lowercases the entire machine id', async () => {
+  it('edge: normalizes machine id and ignores old shared-feed override env vars', async () => {
     const { getMachineFeeds } = await loadConfigModule({
-      NEXT_PUBLIC_USE_SHARED_FEEDS: 'false',
+      NEXT_PUBLIC_FEED_TEMPERATURE: 'TEMP_OVERRIDE',
+      NEXT_PUBLIC_FEED_HUMIDITY: 'HUM_OVERRIDE',
+      NEXT_PUBLIC_FEED_LIGHT: 'LIGHT_OVERRIDE',
+      NEXT_PUBLIC_FEED_FAN_LEVEL: 'FAN_LEVEL_OVERRIDE',
+      NEXT_PUBLIC_FEED_LED: 'LED_OVERRIDE',
+      NEXT_PUBLIC_FEED_LCD: 'LCD_OVERRIDE',
     });
+    const feeds = getMachineFeeds(' MAY-KY-TU-DAC-BIET/#01 ');
+
+    expect(feeds).toEqual({
+      temperature: 'drytech.may-ky-tu-dac-biet-01-temperature',
+      humidity: 'drytech.may-ky-tu-dac-biet-01-humidity',
+      light: 'drytech.may-ky-tu-dac-biet-01-light',
+      fanLevel: 'drytech.may-ky-tu-dac-biet-01-fan-level',
+      led: 'drytech.may-ky-tu-dac-biet-01-led',
+      lcd: 'drytech.may-ky-tu-dac-biet-01-lcd',
+    });
+  });
+
+  it('normal: keeps canonical key format stable', async () => {
+    const { getMachineFeeds } = await loadConfigModule();
+    const feeds = getMachineFeeds('M-A1');
+
+    expect(feeds).toEqual({
+      temperature: 'drytech.m-a1-temperature',
+      humidity: 'drytech.m-a1-humidity',
+      light: 'drytech.m-a1-light',
+      fanLevel: 'drytech.m-a1-fan-level',
+      led: 'drytech.m-a1-led',
+      lcd: 'drytech.m-a1-lcd',
+    });
+  });
+
+  it('edge: lowercases the entire machine id', async () => {
+    const { getMachineFeeds } = await loadConfigModule();
     const feeds = getMachineFeeds('M-A_9X');
 
     expect(feeds.temperature).toBe('drytech.m-a_9x-temperature');
     expect(feeds.fanLevel).toBe('drytech.m-a_9x-fan-level');
   });
 
-  it('error: throws when machineId is invalid in machine-specific mode', async () => {
-    const { getMachineFeeds } = await loadConfigModule({
-      NEXT_PUBLIC_USE_SHARED_FEEDS: 'false',
-    });
+  it('error: throws when machineId is invalid', async () => {
+    const { getMachineFeeds } = await loadConfigModule();
 
     expect(() => getMachineFeeds(undefined as unknown as string)).toThrow(TypeError);
   });

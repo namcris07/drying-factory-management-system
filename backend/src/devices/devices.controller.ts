@@ -25,6 +25,19 @@ export class DevicesController {
     return this.devicesService.findOne(id);
   }
 
+  @Post('validate-feeds')
+  validateFeeds(
+    @Body()
+    dto: {
+      mqttTopicSensor?: string;
+      currentDeviceId?: number;
+    },
+  ) {
+    return this.devicesService
+      .validateFeedConflicts(dto, dto.currentDeviceId)
+      .then(() => ({ ok: true }));
+  }
+
   @Post()
   create(@Body() dto: CreateDeviceDto) {
     return this.devicesService.create(dto);

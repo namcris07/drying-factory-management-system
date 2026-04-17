@@ -42,81 +42,91 @@ jest.mock('bcryptjs', () => ({
   hash: jest.fn(),
 }));
 
-const createPrismaMock = () => ({
-  alert: {
-    findMany: jest.fn(),
-    findUnique: jest.fn(),
-    create: jest.fn(),
-    update: jest.fn(),
-  },
-  alertResolution: {
-    create: jest.fn(),
-  },
-  user: {
-    findFirst: jest.fn(),
-    findMany: jest.fn(),
-    findUnique: jest.fn(),
-    create: jest.fn(),
-    update: jest.fn(),
-    delete: jest.fn(),
-  },
-  batch: {
-    findMany: jest.fn(),
-    count: jest.fn(),
-    findUnique: jest.fn(),
-    create: jest.fn(),
-    update: jest.fn(),
-    delete: jest.fn(),
-  },
-  batchOperation: {
-    create: jest.fn(),
-    updateMany: jest.fn(),
-  },
-  device: {
-    findMany: jest.fn(),
-    findUnique: jest.fn(),
-    create: jest.fn(),
-    update: jest.fn(),
-    delete: jest.fn(),
-  },
-  recipe: {
-    findMany: jest.fn(),
-    findUnique: jest.fn(),
-    create: jest.fn(),
-    update: jest.fn(),
-    delete: jest.fn(),
-  },
-  recipeStep: {
-    deleteMany: jest.fn(),
-  },
-  recipeStage: {
-    deleteMany: jest.fn(),
-    createMany: jest.fn(),
-  },
-  sensorDataLog: {
-    create: jest.fn(),
-    findMany: jest.fn(),
-  },
-  systemConfig: {
-    findMany: jest.fn(),
-    upsert: jest.fn(),
-    findUnique: jest.fn(),
-  },
-  systemConfigUpdate: {
-    create: jest.fn(),
-    findMany: jest.fn(),
-  },
-  zone: {
-    findMany: jest.fn(),
-    findUnique: jest.fn(),
-    create: jest.fn(),
-    update: jest.fn(),
-    delete: jest.fn(),
-  },
-  $transaction: jest.fn(async (ops: Array<Promise<unknown>>) =>
-    Promise.all(ops),
-  ),
-});
+const createPrismaMock = () => {
+  const prisma = {
+    alert: {
+      findMany: jest.fn(),
+      findUnique: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+    },
+    alertResolution: {
+      create: jest.fn(),
+    },
+    user: {
+      findFirst: jest.fn(),
+      findMany: jest.fn(),
+      findUnique: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
+    },
+    batch: {
+      findMany: jest.fn(),
+      count: jest.fn(),
+      findUnique: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
+    },
+    batchOperation: {
+      create: jest.fn(),
+      updateMany: jest.fn(),
+    },
+    device: {
+      findMany: jest.fn(),
+      findUnique: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
+    },
+    recipe: {
+      findMany: jest.fn(),
+      findUnique: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
+    },
+    recipeStep: {
+      deleteMany: jest.fn(),
+    },
+    recipeStage: {
+      deleteMany: jest.fn(),
+      createMany: jest.fn(),
+    },
+    sensorDataLog: {
+      create: jest.fn(),
+      findMany: jest.fn(),
+    },
+    systemConfig: {
+      findMany: jest.fn(),
+      upsert: jest.fn(),
+      findUnique: jest.fn(),
+    },
+    systemConfigUpdate: {
+      create: jest.fn(),
+      findMany: jest.fn(),
+    },
+    zone: {
+      findMany: jest.fn(),
+      findUnique: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      updateMany: jest.fn(),
+      delete: jest.fn(),
+    },
+  } as any;
+
+  prisma.$transaction = jest.fn(async (input: unknown) => {
+    if (typeof input === 'function') {
+      return input(prisma);
+    }
+
+    return Promise.all(input as Array<Promise<unknown>>);
+  });
+
+  return prisma;
+};
 
 describe('Services coverage', () => {
   let prisma: ReturnType<typeof createPrismaMock>;
@@ -267,7 +277,11 @@ describe('Services coverage', () => {
 
     await service.findAll();
     await expect(service.findOne(20)).rejects.toBeInstanceOf(NotFoundException);
-    await service.create({ deviceName: 'D1', zoneID: 1 } as any);
+    await service.create({
+      deviceName: 'D1',
+      zoneID: 1,
+      mqttTopicSensor: 'd1/temperature',
+    } as any);
     await service.update(1, { deviceName: 'D2' } as any);
     await service.remove(1);
 

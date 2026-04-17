@@ -4,16 +4,16 @@
  * components/layouts/OperatorLayout.tsx
  * Layout cho role Operator — sidebar xanh lá + real-time simulation.
  */
-import { useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
-import { Layout, Badge, Button, Avatar, Typography, Space, App, Menu } from 'antd';
+import { Layout, Badge, Button, Avatar, Typography, Space, App, Menu, Select } from 'antd';
 import {
   LogoutOutlined, UserOutlined,
   AppstoreOutlined, DesktopOutlined,
   AlertOutlined, MenuFoldOutlined, MenuUnfoldOutlined,
-  CloudServerOutlined,
 } from '@ant-design/icons';
 import { OperatorProvider, useOperatorContext } from '@/features/operator/model/operator-context';
+import { filterMachinesByZone } from '@/features/operator/model/zone-utils';
 import NotificationCenter from '@/features/notifications/ui/NotificationCenter';
 import { AuthSession, clearAuthSession } from '@/shared/auth/session';
 import { useRequireRole } from '@/shared/auth/useRequireRole';
@@ -23,9 +23,8 @@ const { Text } = Typography;
 
 // Menu Items
 const MENU_ITEMS = [
-  { key: '/operator',           icon: <AppstoreOutlined />,    label: 'Dashboard Khu vực'       },
-  { key: '/operator/realtime',  icon: <DesktopOutlined />,     label: 'Giám sát Thời gian thực' },
-  { key: '/operator/adafruit',  icon: <CloudServerOutlined />, label: 'Adafruit IO'              },
+  { key: '/operator',           icon: <AppstoreOutlined />,    label: 'Dashboard'      },
+  { key: '/operator/realtime',  icon: <DesktopOutlined />,     label: 'Giám sát Buồng sấy'       },
   { key: '/operator/alerts',    icon: <AlertOutlined />,       label: 'Xử lý Cảnh báo'          },
 ];
 
@@ -36,12 +35,14 @@ interface OperatorLayoutProps {
 export default function OperatorLayout({ children }: OperatorLayoutProps) {
   const user = useRequireRole(['Operator']);
 
-  const zone = user?.zone || 'Zone A';
+  const assignedZones =
+    user?.zones?.map((item) => item.zoneName).filter(Boolean) ?? [];
+  const zone = assignedZones[0] || user?.zone || 'Zone A';
   const operatorName = user?.name || '';
 
   return (
     <App>
-      <OperatorProvider zone={zone} operatorName={operatorName}>
+      <OperatorProvider zone={zone} zones={assignedZones} operatorName={operatorName}>
         <OperatorLayoutInner user={user}>{children}</OperatorLayoutInner>
       </OperatorProvider>
     </App>
@@ -57,7 +58,13 @@ function OperatorLayoutInner({ children, user }: OperatorLayoutInnerProps) {
   const router = useRouter();
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
-  const { machines, zone } = useOperatorContext();
+  const { machines, zone, zones, setZone } = useOperatorContext();
+  const zoneMachines = filterMachinesByZone(machines, zone);
+  const isMounted = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false,
+  );
 
   const handleLogout = () => {
     clearAuthSession();
@@ -85,7 +92,7 @@ function OperatorLayoutInner({ children, user }: OperatorLayoutInnerProps) {
           {!collapsed && (
             <div style={{ lineHeight: 1.3, overflow: 'hidden' }}>
               <div style={{ color: '#fff', fontWeight: 800, fontSize: 15, whiteSpace: 'nowrap' }}>DryTech</div>
-              <div style={{ color: '#95de64', fontSize: 10, fontWeight: 700, letterSpacing: 0.9, whiteSpace: 'nowrap' }}>VẬN HÀNH — {zone}</div>
+              <div style={{ color: '#95de64', fontSize: 10, fontWeight: 700, letterSpacing: 0.9, whiteSpace: 'nowrap' }}>VẬN HÀNH BUỒNG — {zone}</div>
             </div>
           )}
         </div>
@@ -101,13 +108,28 @@ function OperatorLayoutInner({ children, user }: OperatorLayoutInnerProps) {
           }))}
         />
 
+        {!collapsed && zones.length > 0 ? (
+          <div style={{ padding: '10px 14px 6px' }}>
+            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', letterSpacing: 1.2, textTransform: 'uppercase', marginBottom: 6 }}>
+              Chọn zone
+            </div>
+            <Select
+              size="small"
+              value={zone}
+              onChange={setZone}
+              options={zones.map((item) => ({ value: item, label: item }))}
+              style={{ width: '100%' }}
+            />
+          </div>
+        ) : null}
+
         {/* Machine quick-nav */}
         {!collapsed && (
           <>
             <div style={{ padding: '10px 16px 4px', fontSize: 10, color: 'rgba(255,255,255,0.3)', letterSpacing: 1.2, textTransform: 'uppercase' }}>
-              Điều khiển máy
+              Buồng sấy trong zone
             </div>
-            {machines.filter(m => m.zone === zone).map(m => {
+            {zoneMachines.map(m => {
               const colorMap: Record<string, string> = { Running: '#52c41a', Error: '#ff4d4f', Idle: '#8c8c8c', Maintenance: '#faad14' };
               return (
                 <div
@@ -146,7 +168,7 @@ function OperatorLayoutInner({ children, user }: OperatorLayoutInnerProps) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
               <Avatar style={{ background: '#52c41a', flexShrink: 0 }} icon={<UserOutlined />} size={30} />
               <div style={{ lineHeight: 1.3 }}>
-                <div style={{ color: '#fff', fontSize: 12, fontWeight: 600 }}>{user?.name || '—'}</div>
+                <div style={{ color: '#fff', fontSize: 12, fontWeight: 600 }}>{isMounted ? (user?.name || '—') : '—'}</div>
                 <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: 10 }}>Vận hành · {zone}</div>
               </div>
             </div>

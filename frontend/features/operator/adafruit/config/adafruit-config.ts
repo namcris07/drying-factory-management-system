@@ -16,23 +16,6 @@ export const AIO_CONFIG = {
 export const MODE_FEED_KEY =
   process.env.NEXT_PUBLIC_FEED_MODE || 'mode_state';
 
-// true: tat ca may dung chung 1 bo feed (phu hop demo nhanh voi 1 bo sensor/relay)
-// false: dung feed theo tung machine ID (drytech.m-a1-...)
-const USE_SHARED_FEEDS = process.env.NEXT_PUBLIC_USE_SHARED_FEEDS !== 'false';
-
-const SHARED_FEEDS: DeviceFeeds = {
-  // Co the override qua .env.local neu can
-  temperature: process.env.NEXT_PUBLIC_FEED_TEMPERATURE || 'BBC_TEMP',
-  humidity: process.env.NEXT_PUBLIC_FEED_HUMIDITY || 'Humidity',
-  light: process.env.NEXT_PUBLIC_FEED_LIGHT || 'Lux',
-  fanLevel: process.env.NEXT_PUBLIC_FEED_FAN_LEVEL || 'fan_level',
-  led:
-    process.env.NEXT_PUBLIC_FEED_LED ||
-    process.env.NEXT_PUBLIC_FEED_RELAY ||
-    'BBC_LED',
-  lcd: process.env.NEXT_PUBLIC_FEED_LCD || 'lcd_text',
-};
-
 /**
  * Feed Keys cho từng máy sấy
  * INPUT  (đọc từ cảm biến) : temperature, humidity, light
@@ -47,24 +30,144 @@ export interface DeviceFeeds {
   lcd:         string; // LCD: ghi chuỗi text
 }
 
+type ResolveMachineFeedsInput = {
+  machineId: string;
+  sensorFeeds?: string[];
+  allowGeneratedFallback?: boolean;
+};
+
+const FEED_SUFFIX = {
+  temperature: 'temperature',
+  humidity: 'humidity',
+  light: 'light',
+  fanLevel: 'fan-level',
+  led: 'led',
+  lcd: 'lcd',
+} as const;
+
+function normalizeMachineId(machineId: string): string {
+  const normalized = machineId
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-_]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '');
+
+  if (!normalized) {
+    throw new TypeError('machineId is required');
+  }
+
+  return normalized;
+}
+
 /**
  * Sinh feed key tự động từ Machine ID.
  * Ví dụ M-A1 → drytech.m-a1-temperature, drytech.m-a1-fan, ...
  */
 export function getMachineFeeds(machineId: string): DeviceFeeds {
-  if (USE_SHARED_FEEDS) {
-    return SHARED_FEEDS;
+  const id = normalizeMachineId(machineId);
+  return {
+    temperature: `drytech.${id}-${FEED_SUFFIX.temperature}`,
+    humidity: `drytech.${id}-${FEED_SUFFIX.humidity}`,
+    light: `drytech.${id}-${FEED_SUFFIX.light}`,
+    fanLevel: `drytech.${id}-${FEED_SUFFIX.fanLevel}`,
+    led: `drytech.${id}-${FEED_SUFFIX.led}`,
+    lcd: `drytech.${id}-${FEED_SUFFIX.lcd}`,
+  };
+}
+
+function normalizeFeed(feed: string): string {
+  return feed.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function pickFeedByTokens(
+  feeds: string[],
+  tokens: string[],
+): string | null {
+  for (const feed of feeds) {
+    const normalized = normalizeFeed(feed);
+    if (tokens.some((token) => normalized.includes(token))) {
+      return feed;
+    }
+  }
+  return null;
+}
+
+function uniqueFeeds(feeds: Array<string | null | undefined>): string[] {
+  return Array.from(
+    new Set(feeds.map((feed) => String(feed ?? '').trim()).filter(Boolean)),
+  );
+}
+
+function extractFeedKey(raw: string): string {
+  const input = String(raw ?? '').trim();
+  if (!input) return '';
+
+  const lower = input.toLowerCase();
+  const marker = '/feeds/';
+  const markerIndex = lower.indexOf(marker);
+
+  const key = markerIndex >= 0 ? input.slice(markerIndex + marker.length) : input;
+  return key.split('/')[0]?.trim() ?? '';
+}
+
+function canonicalizeFeedKey(feed: string, machineId: string): string {
+  const key = extractFeedKey(feed);
+  if (!key) return '';
+
+  const normalizedMachineId = normalizeMachineId(machineId);
+  const lower = key.toLowerCase();
+  if (lower.startsWith('drytech.')) return lower;
+
+  if (lower.startsWith(`${normalizedMachineId}-`)) {
+    return `drytech.${lower}`;
   }
 
-  const id = machineId.toLowerCase();
-  return {
-    temperature: `drytech.${id}-temperature`,
-    humidity:    `drytech.${id}-humidity`,
-    light:       `drytech.${id}-light`,
-    fanLevel:    `drytech.${id}-fan-level`,
-    led:         `drytech.${id}-led`,
-    lcd:         `drytech.${id}-lcd`,
+  return lower;
+}
+
+/**
+ * Ưu tiên feed đã cấu hình trong DB để tránh publish nhầm feed tự sinh.
+ * Chỉ fallback sang feed generate theo machineId khi được cho phép rõ ràng.
+ */
+export function resolveConfiguredMachineFeeds(
+  input: ResolveMachineFeedsInput,
+): DeviceFeeds | null {
+  const configuredFeeds = uniqueFeeds(input.sensorFeeds ?? []).map((feed) =>
+    canonicalizeFeedKey(feed, input.machineId),
+  );
+
+  const mapped: DeviceFeeds = {
+    temperature:
+      pickFeedByTokens(configuredFeeds, ['temperature', 'temp']) ||
+      '',
+    humidity:
+      pickFeedByTokens(configuredFeeds, ['humidity', 'humid']) ||
+      '',
+    light:
+      pickFeedByTokens(configuredFeeds, ['light', 'lux', 'ldr']) ||
+      '',
+    fanLevel:
+      pickFeedByTokens(configuredFeeds, ['fanlevel', 'fan']) ||
+      '',
+    led:
+      pickFeedByTokens(configuredFeeds, ['led']) ||
+      '',
+    lcd:
+      pickFeedByTokens(configuredFeeds, ['lcd']) ||
+      '',
   };
+
+  const hasAnyMappedFeed = Object.values(mapped).some(Boolean);
+  if (hasAnyMappedFeed) {
+    return mapped;
+  }
+
+  if (input.allowGeneratedFallback) {
+    return getMachineFeeds(input.machineId);
+  }
+
+  return null;
 }
 
 /** Ngưỡng cảnh báo — đồng bộ với SystemThresholds */

@@ -1,27 +1,13 @@
-import { Transform, Type } from 'class-transformer';
+import { Type } from 'class-transformer';
 import {
-  IsArray,
+  IsIn,
   IsInt,
   IsNotEmpty,
   IsObject,
   IsOptional,
   IsString,
+  Matches,
 } from 'class-validator';
-
-const parseSensorFeeds = (input: unknown): string[] => {
-  if (Array.isArray(input)) {
-    return input.map((item) => String(item ?? '').trim()).filter(Boolean);
-  }
-
-  if (typeof input === 'string') {
-    return input
-      .split(/[\n,;]/)
-      .map((item) => item.trim())
-      .filter(Boolean);
-  }
-
-  return [];
-};
 
 export class CreateDeviceDto {
   @IsNotEmpty()
@@ -34,20 +20,14 @@ export class CreateDeviceDto {
 
   @IsOptional()
   @IsString()
+  @Matches(/^[a-zA-Z0-9._/-]+$/, {
+    message: 'Feed key chỉ cho phép ký tự a-z, A-Z, 0-9, ., _, /, -',
+  })
   mqttTopicSensor?: string;
 
   @IsOptional()
-  @Transform(({ value }) => parseSensorFeeds(value))
-  @IsArray()
-  @IsString({ each: true })
-  sensorFeeds?: string[];
-
-  @IsOptional()
   @IsString()
-  mqttTopicCmd?: string;
-
-  @IsOptional()
-  @IsString()
+  @IsIn(['TemperatureSensor', 'HumiditySensor', 'Fan', 'Led', 'Lcd'])
   deviceType?: string;
 
   @IsOptional()

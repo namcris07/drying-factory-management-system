@@ -4,9 +4,9 @@
  * All HTTP requests go through this module.
  */
 
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000/api';
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4001/api';
 
-class ApiError extends Error {
+export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
@@ -31,7 +31,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 // ── Auth ──────────────────────────────────────────────────────────────────
 export const authApi = {
   login: (email: string, password: string) =>
-    request<{ id: number; name: string; role: string; zone: string; email: string }>(
+    request<{
+      id: number;
+      name: string;
+      role: string;
+      zone: string;
+      zones?: { zoneID: number; zoneName: string }[];
+      email: string;
+    }>(
       '/auth/login',
       { method: 'POST', body: JSON.stringify({ email, password }) },
     ),
@@ -58,10 +65,19 @@ export const usersApi = {
     email: string;
     password: string;
     role: string;
+    chamberIDs?: number[];
   }) => request<ApiUser>('/users', { method: 'POST', body: JSON.stringify(data) }),
   update: (
     id: number,
-    data: Partial<{ firstName: string; lastName: string; email: string; role: string; status: string; password: string }>,
+    data: Partial<{
+      firstName: string;
+      lastName: string;
+      email: string;
+      role: string;
+      status: string;
+      password: string;
+      chamberIDs: number[];
+    }>,
   ) => request<ApiUser>(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   remove: (id: number) => request<void>(`/users/${id}`, { method: 'DELETE' }),
 };
@@ -84,6 +100,53 @@ export const zonesApi = {
   remove: (id: number) => request<void>(`/zones/${id}`, { method: 'DELETE' }),
 };
 
+export type ApiChamber = {
+  chamberID: number;
+  chamberName: string | null;
+  chamberDescription: string | null;
+  chamberStatus: string | null;
+  zoneID: number | null;
+  zoneName: string | null;
+  sensors: {
+    sensorName: string;
+    sensorType: string;
+    feedKey: string;
+    status: string;
+  }[];
+};
+
+export const chambersApi = {
+  getAll: () => request<ApiChamber[]>('/chambers'),
+  getOne: (id: number) => request<ApiChamber>(`/chambers/${id}`),
+  create: (data: {
+    chamberName: string;
+    chamberDescription?: string;
+    zoneID: number;
+    chamberStatus?: string;
+    sensors?: {
+      sensorName?: string;
+      sensorType: string;
+      feedKey: string;
+      status?: string;
+    }[];
+  }) =>
+    request<ApiChamber>('/chambers', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id: number, data: Partial<{
+    chamberName: string;
+    chamberDescription: string;
+    zoneID: number;
+    chamberStatus: string;
+    sensors: {
+      sensorName?: string;
+      sensorType: string;
+      feedKey: string;
+      status?: string;
+    }[];
+  }>) =>
+    request<ApiChamber>(`/chambers/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  remove: (id: number) => request<{ ok: boolean }>(`/chambers/${id}`, { method: 'DELETE' }),
+};
+
 // ── Devices ───────────────────────────────────────────────────────────────
 export type ApiDevice = {
   deviceID: number;
@@ -92,7 +155,6 @@ export type ApiDevice = {
   deviceType: string | null;
   mqttTopicSensor: string | null;
   sensorFeeds?: string[];
-  mqttTopicCmd: string | null;
   zoneID: number | null;
   zone: { zoneID: number; zoneName: string | null } | null;
   metaData: Record<string, unknown> | null;
@@ -103,8 +165,6 @@ export type DeviceUpsertPayload = {
   deviceStatus?: string;
   deviceType?: string;
   mqttTopicSensor?: string;
-  sensorFeeds?: string[];
-  mqttTopicCmd?: string;
   zoneID?: number;
   metaData?: Record<string, unknown>;
 };
@@ -117,6 +177,13 @@ export const devicesApi = {
     request<ApiDevice>('/devices', { method: 'POST', body: JSON.stringify(data) }),
   update: (id: number, data: DevicePatchPayload) =>
     request<ApiDevice>(`/devices/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  validateFeeds: (data: {
+    mqttTopicSensor?: string;
+    currentDeviceId?: number;
+  }) => request<{ ok: boolean }>('/devices/validate-feeds', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
   remove: (id: number) => request<void>(`/devices/${id}`, { method: 'DELETE' }),
 };
 
@@ -253,7 +320,7 @@ export const batchesApi = {
     return request<ApiBatchList>(`/batches${q ? `?${q}` : ''}`);
   },
   getOne: (id: number) => request<ApiBatch>(`/batches/${id}`),
-  create: (data: { recipeID: number; deviceID: number; operationMode?: string; startTime: string }) =>
+  create: (data: { recipeID: number; deviceID?: number; chamberID?: number; operationMode?: string; startTime: string }) =>
     request<ApiBatch>('/batches', { method: 'POST', body: JSON.stringify(data) }),
   update: (id: number, data: { batchStatus?: string; batchResult?: string; currentStep?: number }) =>
     request<ApiBatch>(`/batches/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
@@ -269,7 +336,19 @@ export type ApiAlert = {
   alertStatus: string | null;
   deviceID: number | null;
   device: { deviceID: number; deviceName: string | null } | null;
-  alertResolutions: { arID: number; resolveStatus: string | null; resolveNote: string | null }[];
+  alertResolutions: {
+    arID: number;
+    resolveTime: string | null;
+    resolveStatus: string | null;
+    resolveNote: string | null;
+    userID: number | null;
+    user: {
+      userID: number;
+      firstName: string | null;
+      lastName: string | null;
+      email: string | null;
+    } | null;
+  }[];
 };
 
 export const alertsApi = {
@@ -277,7 +356,7 @@ export const alertsApi = {
     request<ApiAlert[]>(`/alerts${status ? `?status=${status}` : ''}`),
   acknowledge: (id: number) =>
     request<ApiAlert>(`/alerts/${id}/acknowledge`, { method: 'PATCH' }),
-  resolve: (id: number, data: { resolveStatus: string; resolveNote?: string }) =>
+  resolve: (id: number, data: { resolveStatus: string; resolveNote?: string; userID?: number }) =>
     request<unknown>(`/alerts/${id}/resolve`, { method: 'PATCH', body: JSON.stringify(data) }),
 };
 
