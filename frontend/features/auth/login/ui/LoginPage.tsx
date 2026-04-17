@@ -24,7 +24,13 @@ export default function LoginPage() {
     setError('');
     try {
       const user = await authApi.login(values.email, values.password);
-      setAuthSession({ name: user.name, role: user.role as UserRole, zone: user.zone });
+      setAuthSession({
+        userID: user.id,
+        name: user.name,
+        role: user.role as UserRole,
+        zone: user.zone,
+        zones: user.zones,
+      });
       router.push(roleHomePath(user.role as UserRole));
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Đăng nhập thất bại. Vui lòng thử lại.';

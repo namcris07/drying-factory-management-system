@@ -49,6 +49,20 @@ type ThresholdConfig = {
   doorOpenTimeout: number;
 };
 
+type DynamicFanComparator = 'gte' | 'lte';
+
+type DynamicFanRuleConfig = {
+  id: string;
+  enabled: boolean;
+  sensorFeed: string;
+  comparator: DynamicFanComparator;
+  threshold: number;
+  fanFeed: string;
+  fanLevelOn: number;
+  fanLevelOff: number;
+  configKey: string;
+};
+
 const DEFAULT_THRESHOLDS: ThresholdConfig = {
   maxTempSafe: 90,
   minHumidity: 8,
@@ -61,6 +75,9 @@ const DEFAULT_THRESHOLDS: ThresholdConfig = {
   lightSensorThreshold: 500,
   doorOpenTimeout: 5,
 };
+
+const SENSOR_FAULT_TEMP_MIN = 5;
+const SENSOR_FAULT_TEMP_MAX = 120;
 
 @Injectable()
 export class MqttService implements OnModuleInit, OnModuleDestroy {
@@ -87,6 +104,12 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
   private lastOperatorLcdMessage = '';
   private publishingAutoLcd = false;
   private readonly tempHysteresisFanState = new Map<string, boolean>();
+  private readonly heaterHysteresisState = new Map<string, boolean>();
+  private readonly faultyTemperatureFeeds = new Set<string>();
+  private allowedPublishFeeds = new Set<string>();
+  private allowedPublishFeedsRefreshedAt = 0;
+  private dynamicFanRulesCachedAt = 0;
+  private dynamicFanRulesCache: DynamicFanRuleConfig[] = [];
 
   constructor(
     private readonly configService: ConfigService,
@@ -105,15 +128,15 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     );
     this.lcdFeedKey = this.configService.get<string>(
       'ADAFRUIT_IO_LCD_FEED',
-      'lcd_text',
+      '',
     );
     this.fanLevelFeedKey = this.configService.get<string>(
       'ADAFRUIT_IO_FAN_LEVEL_FEED',
-      'fan_level',
+      '',
     );
     this.ledFeedKey = this.configService.get<string>(
       'ADAFRUIT_IO_LED_FEED',
-      'BBC_LED',
+      '',
     );
   }
 
@@ -137,6 +160,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     this.client.on('connect', () => {
       this.isConnected = true;
       this.logger.log('Da ket noi Adafruit IO MQTT thanh cong.');
+      void this.refreshAllowedPublishFeeds(true);
       void this.refreshSubscriptionsFromDevices();
       this.startLcdAutoPushLoop();
     });
@@ -177,7 +201,9 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
 
     const requestedFeeds =
       feeds && feeds.length > 0
-        ? feeds.map((item) => item.trim()).filter(Boolean)
+        ? feeds
+            .map((item) => this.parseFeedKey(item))
+            .filter((item): item is string => !!item)
         : [];
     const targetFeeds = Array.from(
       new Set([...this.getDefaultSubscribeFeeds(), ...requestedFeeds]),
@@ -214,32 +240,51 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     value: unknown,
     optimisticSync = true,
   ): Promise<{ ok: boolean; topic: string; payload: string; note?: string }> {
+    const normalizedFeed = this.canonicalizeActuatorFeedKey(
+      this.requireFeedKey(feed),
+    );
+
     if (value === undefined) {
       throw new BadRequestException('value la bat buoc khi publish command');
     }
 
+    const topic = this.toTopic(normalizedFeed);
+    const payload = this.toPayload(value);
+
+    if (!(await this.isPublishFeedAllowed(normalizedFeed))) {
+      const note =
+        `Feed ${normalizedFeed} khong nam trong danh sach duoc phep publish. ` +
+        'He thong chi publish data len feed da khai bao san, khong tu tao feed moi.';
+      this.logger.warn(note);
+      return {
+        ok: false,
+        topic,
+        payload,
+        note,
+      };
+    }
+
     // Check if this is a device control feed and if mode allows it
-    if (this.isDeviceControlFeed(feed)) {
+    if (this.isDeviceControlFeed(normalizedFeed)) {
       const mode = await this.modeControl.getCurrentMode();
       if (mode === 'auto') {
         const note =
           'Hệ thống đang chạy ở chế độ Auto. Không thể điều khiển thiết bị thủ công.';
         this.logger.warn(
-          `publishCommand bị chặn (AUTO mode): ${feed} = ${value}`,
+          `publishCommand bị chặn (AUTO mode): ${normalizedFeed} = ${value}`,
         );
         return {
           ok: false,
-          topic: this.toTopic(feed),
-          payload: this.toPayload(value),
+          topic,
+          payload,
           note,
         };
       }
     }
 
-    const topic = this.toTopic(feed);
-    const payload = this.toPayload(value);
     const isLcdFeed =
-      this.normalizeFeedKey(feed) === this.normalizeFeedKey(this.lcdFeedKey);
+      this.normalizeFeedKey(normalizedFeed) ===
+      this.normalizeFeedKey(this.lcdFeedKey);
 
     if (
       isLcdFeed &&
@@ -252,21 +297,21 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
 
     if (!this.client || !this.isConnected) {
       if (optimisticSync) {
-        await this.saveState(feed, topic, value, 'server-command');
+        await this.saveState(normalizedFeed, topic, value, 'server-command');
       }
 
       await this.persistSensorLog({
         direction: 'outgoing',
         source: 'server-command',
         topic,
-        feed,
+        feed: normalizedFeed,
         value,
         raw: payload,
       });
 
       const note =
         'MQTT client chua ket noi. Lenh da duoc luu state local, chua gui toi Adafruit.';
-      this.logger.warn(`${note} Feed=${feed}`);
+      this.logger.warn(`${note} Feed=${normalizedFeed}`);
       return {
         ok: false,
         topic,
@@ -286,14 +331,14 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     });
 
     if (optimisticSync) {
-      await this.saveState(feed, topic, value, 'server-command');
+      await this.saveState(normalizedFeed, topic, value, 'server-command');
     }
 
     await this.persistSensorLog({
       direction: 'outgoing',
       source: 'server-command',
       topic,
-      feed,
+      feed: normalizedFeed,
       value,
       raw: payload,
     });
@@ -307,14 +352,15 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException('value la bat buoc khi simulate incoming');
     }
 
-    const topic = this.toTopic(feed);
+    const normalizedFeed = this.requireFeedKey(feed);
+    const topic = this.toTopic(normalizedFeed);
     const payload = Buffer.from(this.toPayload(value), 'utf8');
     await this.processIncomingTopic(topic, payload, 'server-simulate');
 
     return {
       ok: true,
       topic,
-      feed,
+      feed: normalizedFeed,
       value,
       note: 'Da gia lap incoming message nhu tu Adafruit/Thiet bi gui ve.',
     };
@@ -401,7 +447,9 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
   }
 
   private getDefaultSubscribeFeeds() {
-    return [this.modeFeedKey];
+    return [this.modeFeedKey]
+      .map((item) => this.parseFeedKey(item))
+      .filter((item): item is string => !!item);
   }
 
   private getFallbackSubscribeFeeds() {
@@ -412,8 +460,8 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
 
     return fromEnv
       .split(',')
-      .map((item) => item.trim())
-      .filter(Boolean);
+      .map((item) => this.parseFeedKey(item))
+      .filter((item): item is string => !!item);
   }
 
   private async getConfiguredFeedsFromDevices(): Promise<string[]> {
@@ -437,6 +485,161 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     }
 
     return Array.from(feeds);
+  }
+
+  private getFallbackPublishFeeds() {
+    const fromEnv = this.configService.get<string>('ADAFRUIT_IO_PUBLISH_FEEDS');
+    if (!fromEnv) return [];
+
+    return fromEnv
+      .split(',')
+      .map((item) => this.parseFeedKey(item))
+      .filter((item): item is string => !!item);
+  }
+
+  private async getConfiguredCommandFeedsFromDevices(): Promise<string[]> {
+    const rows = await this.prisma.device.findMany({
+      select: {
+        mqttTopicCmd: true,
+      },
+    });
+
+    const feeds = new Set<string>();
+
+    for (const row of rows) {
+      const commandFeeds = this.splitFeeds(row.mqttTopicCmd);
+      for (const feed of commandFeeds) {
+        feeds.add(feed);
+      }
+    }
+
+    return Array.from(feeds);
+  }
+
+  private isActuatorLikeFeed(feed: string): boolean {
+    const normalized = this.normalizeFeedKey(feed);
+    return (
+      normalized.includes('fan') ||
+      normalized.includes('led') ||
+      normalized.includes('lcd') ||
+      normalized.includes('heater') ||
+      normalized.includes('humidifier') ||
+      normalized.includes('doorlock')
+    );
+  }
+
+  private async getConfiguredActuatorFeedsFromDevices(): Promise<string[]> {
+    const rows = await this.prisma.device.findMany({
+      select: {
+        mqttTopicSensor: true,
+        metaData: true,
+      },
+    });
+
+    const feeds = new Set<string>();
+    for (const row of rows) {
+      const sensorFeeds = this.extractDeviceFeeds(
+        row.mqttTopicSensor,
+        row.metaData,
+      );
+
+      for (const feed of sensorFeeds) {
+        if (this.isActuatorLikeFeed(feed)) {
+          feeds.add(feed);
+        }
+      }
+    }
+
+    return Array.from(feeds);
+  }
+
+  private async refreshAllowedPublishFeeds(force = false): Promise<void> {
+    const now = Date.now();
+    if (!force && now - this.allowedPublishFeedsRefreshedAt < 30000) {
+      return;
+    }
+
+    const [
+      deviceCommandFeeds,
+      deviceActuatorFeeds,
+      extraPublishFeeds,
+      setpointRows,
+    ] = await Promise.all([
+      this.getConfiguredCommandFeedsFromDevices(),
+      this.getConfiguredActuatorFeedsFromDevices(),
+      Promise.resolve(this.getFallbackPublishFeeds()),
+      this.prisma.systemConfig.findMany({
+        where: {
+          configKey: {
+            in: [
+              'temperatureSetpointFeed',
+              'humiditySetpointFeed',
+              'operatingModeFeed',
+            ],
+          },
+        },
+        select: {
+          configKey: true,
+          configValue: true,
+        },
+      }),
+    ]);
+
+    const setpointByKey = new Map(
+      setpointRows.map((row) => [
+        row.configKey,
+        String(row.configValue ?? '').trim(),
+      ]),
+    );
+
+    const defaults = [
+      this.modeFeedKey,
+      this.lcdFeedKey,
+      this.fanLevelFeedKey,
+      this.ledFeedKey,
+      setpointByKey.get('temperatureSetpointFeed') || '',
+      setpointByKey.get('humiditySetpointFeed') || '',
+      setpointByKey.get('operatingModeFeed') || this.modeFeedKey,
+    ];
+
+    const normalized = new Set<string>();
+
+    const addAllowedFeed = (feed: string | null | undefined) => {
+      const key = this.parseFeedKey(feed);
+      if (!key) return;
+
+      const lower = key.toLowerCase();
+      const variants = new Set<string>([lower]);
+
+      if (lower.startsWith('drytech.m-')) {
+        variants.add(lower.replace(/^drytech\./, ''));
+      }
+
+      if (/^m-[a-z0-9-]+-/.test(lower)) {
+        variants.add(`drytech.${lower}`);
+      }
+
+      for (const variant of variants) {
+        normalized.add(this.normalizeFeedKey(variant));
+      }
+    };
+
+    for (const feed of [
+      ...defaults,
+      ...deviceCommandFeeds,
+      ...deviceActuatorFeeds,
+      ...extraPublishFeeds,
+    ]) {
+      addAllowedFeed(feed);
+    }
+
+    this.allowedPublishFeeds = normalized;
+    this.allowedPublishFeedsRefreshedAt = now;
+  }
+
+  private async isPublishFeedAllowed(feed: string): Promise<boolean> {
+    await this.refreshAllowedPublishFeeds();
+    return this.allowedPublishFeeds.has(this.normalizeFeedKey(feed));
   }
 
   /**
@@ -490,8 +693,53 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     if (!raw) return [];
     return raw
       .split(/[\n,;]/)
-      .map((feed) => feed.trim())
-      .filter(Boolean);
+      .map((feed) => this.parseFeedKey(feed))
+      .filter((feed): feed is string => !!feed);
+  }
+
+  private parseFeedKey(feed: string | null | undefined): string | null {
+    const raw = String(feed ?? '').trim();
+    if (!raw) return null;
+
+    const lower = raw.toLowerCase();
+    const marker = '/feeds/';
+    const markerIndex = lower.indexOf(marker);
+
+    const key = markerIndex >= 0 ? raw.slice(markerIndex + marker.length) : raw;
+    if (!key) return null;
+    return key.trim();
+  }
+
+  private canonicalizeActuatorFeedKey(feed: string): string {
+    const key = String(feed ?? '')
+      .trim()
+      .toLowerCase();
+    if (!key) return key;
+
+    if (key.startsWith('drytech.')) return key;
+
+    const isMachineScoped = /^m-[a-z0-9-]+-/.test(key);
+    const isActuatorKey = this.isActuatorLikeFeed(key);
+    if (isMachineScoped && isActuatorKey) {
+      return `drytech.${key}`;
+    }
+
+    return key;
+  }
+
+  private requireFeedKey(feed: string | null | undefined): string {
+    const key = this.parseFeedKey(feed);
+    if (!key) {
+      throw new BadRequestException('feed khong hop le');
+    }
+
+    if (!/^[a-zA-Z0-9._-]+$/.test(key)) {
+      throw new BadRequestException(
+        `feed khong hop le: ${feed}. Chi chap nhan ky tu a-z, A-Z, 0-9, ., _, -`,
+      );
+    }
+
+    return key;
   }
 
   private extractDeviceFeeds(
@@ -521,9 +769,15 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
   }
 
   private extractFeedFromTopic(topic: string) {
-    const parts = topic.split('/');
-    const feed = parts.length >= 3 ? parts[2] : topic;
-    return feed;
+    const marker = '/feeds/';
+    const lower = topic.toLowerCase();
+    const markerIndex = lower.indexOf(marker);
+
+    if (markerIndex >= 0) {
+      return topic.slice(markerIndex + marker.length);
+    }
+
+    return topic;
   }
 
   private parsePayload(raw: string): unknown {
@@ -566,6 +820,8 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       value,
       raw,
     });
+
+    await this.evaluateDynamicFanRules(feed, value);
 
     await this.evaluateThresholdAlerts(feed, value);
 
@@ -654,17 +910,35 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     const formulaThreshold = await this.getFormulaThresholdConfig(deviceId);
 
     if (metric === 'temperature') {
+      const isFaulty = await this.syncTemperatureSensorFaultStatus({
+        feed,
+        value: numericValue,
+        deviceId,
+        deviceName,
+      });
+      if (isFaulty) {
+        return;
+      }
+    }
+
+    if (metric === 'temperature') {
+      const sensorFeedLabel = this.formatSensorFeedLabel(feed);
+
       await this.handleMetricAlert({
-        conditionKey: `temp_high:${deviceId ?? 'global'}`,
+        conditionKey: `temp_high:${deviceId ?? 'global'}:${this.normalizeFeedKey(feed)}`,
         active: numericValue > thresholds.maxTempSafe,
         delaySeconds: thresholds.alertDelaySeconds,
         deviceId,
         alertType: 'error',
-        alertMessage: `${deviceName}: Nhiệt độ vượt ngưỡng an toàn (${thresholds.maxTempSafe}°C).`,
+        alertMessage: `${deviceName}: Cảm biến ${sensorFeedLabel} vượt ngưỡng global (${thresholds.maxTempSafe}°C).`,
       });
 
+      if (numericValue <= thresholds.maxTempSafe) {
+        await this.resolveLegacyLocalProtectionAlerts(deviceId);
+      }
+
       await this.handleMetricAlert({
-        conditionKey: `temp_formula_high:${deviceId ?? 'global'}`,
+        conditionKey: `temp_formula_high:${deviceId ?? 'global'}:${this.normalizeFeedKey(feed)}`,
         active:
           Number.isFinite(formulaThreshold.maxTemperature) &&
           numericValue >=
@@ -676,8 +950,19 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
         alertMessage: this.buildFormulaTemperatureAlertMessage(
           deviceName,
           formulaThreshold,
+          sensorFeedLabel,
         ),
       });
+
+      if (numericValue > thresholds.maxTempSafe) {
+        await this.applyLocalProtectionFanMax({
+          deviceId,
+          deviceName,
+          sourceFeed: feed,
+          currentTemperature: numericValue,
+          maxTempSafe: thresholds.maxTempSafe,
+        });
+      }
 
       if (numericValue > thresholds.maxTempSafe) {
         await this.autoStopBatchWhenSystemThresholdExceeded({
@@ -690,12 +975,23 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
         });
       }
 
-      await this.applyAutoHysteresisFanControl({
-        metric,
-        sourceFeed: feed,
+      const hasDynamicRule =
+        await this.hasEnabledDynamicRuleForSensorFeed(feed);
+      if (!hasDynamicRule) {
+        await this.applyAutoHysteresisFanControl({
+          metric,
+          sourceFeed: feed,
+          deviceId,
+          deviceName,
+          currentValue: numericValue,
+          formulaThreshold,
+          thresholds,
+        });
+      }
+
+      await this.applyAverageTemperatureHeaterControl({
         deviceId,
         deviceName,
-        currentValue: numericValue,
         formulaThreshold,
         thresholds,
       });
@@ -704,27 +1000,28 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
 
     if (metric === 'humidity') {
       const formulaHumidityMax = formulaThreshold.maxHumidity;
+      const sensorFeedLabel = this.formatSensorFeedLabel(feed);
 
       await this.handleMetricAlert({
-        conditionKey: `hum_low:${deviceId ?? 'global'}`,
+        conditionKey: `hum_low:${deviceId ?? 'global'}:${this.normalizeFeedKey(feed)}`,
         active: numericValue < thresholds.minHumidity,
         delaySeconds: thresholds.alertDelaySeconds,
         deviceId,
         alertType: 'warning',
-        alertMessage: `${deviceName}: Độ ẩm thấp hơn ngưỡng tối thiểu (${thresholds.minHumidity}%).`,
+        alertMessage: `${deviceName}: Cảm biến ${sensorFeedLabel} thấp hơn ngưỡng tối thiểu (${thresholds.minHumidity}%).`,
       });
 
       await this.handleMetricAlert({
-        conditionKey: `hum_high:${deviceId ?? 'global'}`,
+        conditionKey: `hum_high:${deviceId ?? 'global'}:${this.normalizeFeedKey(feed)}`,
         active: numericValue > thresholds.maxHumidity,
         delaySeconds: thresholds.alertDelaySeconds,
         deviceId,
         alertType: 'warning',
-        alertMessage: `${deviceName}: Độ ẩm vượt ngưỡng tối đa (${thresholds.maxHumidity}%).`,
+        alertMessage: `${deviceName}: Cảm biến ${sensorFeedLabel} vượt ngưỡng global (${thresholds.maxHumidity}%).`,
       });
 
       await this.handleMetricAlert({
-        conditionKey: `hum_formula_high:${deviceId ?? 'global'}`,
+        conditionKey: `hum_formula_high:${deviceId ?? 'global'}:${this.normalizeFeedKey(feed)}`,
         active:
           Number.isFinite(formulaHumidityMax) &&
           numericValue >=
@@ -736,18 +1033,23 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
         alertMessage: this.buildFormulaHumidityAlertMessage(
           deviceName,
           formulaThreshold,
+          sensorFeedLabel,
         ),
       });
 
-      await this.applyAutoHysteresisFanControl({
-        metric,
-        sourceFeed: feed,
-        deviceId,
-        deviceName,
-        currentValue: numericValue,
-        formulaThreshold,
-        thresholds,
-      });
+      const hasDynamicRule =
+        await this.hasEnabledDynamicRuleForSensorFeed(feed);
+      if (!hasDynamicRule) {
+        await this.applyAutoHysteresisFanControl({
+          metric,
+          sourceFeed: feed,
+          deviceId,
+          deviceName,
+          currentValue: numericValue,
+          formulaThreshold,
+          thresholds,
+        });
+      }
       return;
     }
 
@@ -898,6 +1200,315 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  private async getDynamicFanRules(
+    force = false,
+  ): Promise<DynamicFanRuleConfig[]> {
+    const now = Date.now();
+    if (!force && now - this.dynamicFanRulesCachedAt < 5000) {
+      return this.dynamicFanRulesCache;
+    }
+
+    const rows = await this.prisma.systemConfig.findMany({
+      where: {
+        configKey: {
+          startsWith: 'operatorFanRules.',
+        },
+      },
+      select: {
+        configKey: true,
+        configValue: true,
+      },
+    });
+
+    const parsedRules: DynamicFanRuleConfig[] = [];
+
+    for (const row of rows) {
+      const raw = String(row.configValue ?? '').trim();
+      if (!raw) continue;
+
+      let payload: unknown;
+      try {
+        payload = JSON.parse(raw) as unknown;
+      } catch {
+        continue;
+      }
+
+      if (!Array.isArray(payload)) continue;
+
+      for (let index = 0; index < payload.length; index += 1) {
+        const item = payload[index];
+        if (!item || typeof item !== 'object') continue;
+
+        const candidate = item as Partial<DynamicFanRuleConfig>;
+        const sensorFeed = this.parseFeedKey(
+          String(candidate.sensorFeed ?? '').trim(),
+        );
+        const fanFeed = this.parseFeedKey(
+          String(candidate.fanFeed ?? '').trim(),
+        );
+        if (!sensorFeed || !fanFeed) continue;
+
+        const threshold = Number(candidate.threshold);
+        const fanLevelOn = Number(candidate.fanLevelOn);
+        const fanLevelOff = Number(candidate.fanLevelOff);
+
+        parsedRules.push({
+          id: String(candidate.id ?? `${row.configKey}#${index + 1}`),
+          enabled: Boolean(candidate.enabled),
+          sensorFeed,
+          comparator: candidate.comparator === 'lte' ? 'lte' : 'gte',
+          threshold: Number.isFinite(threshold) ? threshold : 0,
+          fanFeed: this.canonicalizeActuatorFeedKey(fanFeed),
+          fanLevelOn: Number.isFinite(fanLevelOn)
+            ? Math.max(0, Math.min(100, Math.round(fanLevelOn)))
+            : 70,
+          fanLevelOff: Number.isFinite(fanLevelOff)
+            ? Math.max(0, Math.min(100, Math.round(fanLevelOff)))
+            : 0,
+          configKey: row.configKey,
+        });
+      }
+    }
+
+    this.dynamicFanRulesCache = parsedRules;
+    this.dynamicFanRulesCachedAt = now;
+    return parsedRules;
+  }
+
+  private async hasEnabledDynamicRuleForSensorFeed(
+    feed: string,
+  ): Promise<boolean> {
+    const normalizedFeed = this.normalizeFeedKey(feed);
+    const rules = await this.getDynamicFanRules();
+    return rules.some(
+      (rule) =>
+        rule.enabled &&
+        this.normalizeFeedKey(rule.sensorFeed) === normalizedFeed,
+    );
+  }
+
+  private findLatestFeedValue(feed: string): number | null {
+    const normalizedTarget = this.normalizeFeedKey(feed);
+    const matched = Array.from(this.feedState.values()).find(
+      (row) => this.normalizeFeedKey(row.feed) === normalizedTarget,
+    );
+    if (!matched) return null;
+
+    const numeric = Number(matched.value);
+    return Number.isFinite(numeric) ? numeric : null;
+  }
+
+  private isFaultTemperatureReading(value: number): boolean {
+    return value < SENSOR_FAULT_TEMP_MIN || value > SENSOR_FAULT_TEMP_MAX;
+  }
+
+  private isTemperatureFeedMarkedFaulty(feed: string): boolean {
+    return this.faultyTemperatureFeeds.has(this.normalizeFeedKey(feed));
+  }
+
+  private async syncTemperatureSensorFaultStatus(params: {
+    feed: string;
+    value: number;
+    deviceId: number | null;
+    deviceName: string;
+  }): Promise<boolean> {
+    const { feed, value, deviceId, deviceName } = params;
+    const normalizedFeed = this.normalizeFeedKey(feed);
+    const alertMessage = `${deviceName}: Cảm biến nhiệt ${feed} cho giá trị bất thường (${value}°C, hợp lệ ${SENSOR_FAULT_TEMP_MIN}-${SENSOR_FAULT_TEMP_MAX}°C). Đã loại khỏi trung bình và yêu cầu kiểm tra bảo trì.`;
+    const isFault = this.isFaultTemperatureReading(value);
+
+    if (isFault) {
+      if (!this.faultyTemperatureFeeds.has(normalizedFeed)) {
+        this.faultyTemperatureFeeds.add(normalizedFeed);
+        await this.createPendingAlertIfNeeded(
+          deviceId,
+          'warning',
+          alertMessage,
+        );
+      }
+      return true;
+    }
+
+    if (this.faultyTemperatureFeeds.has(normalizedFeed)) {
+      this.faultyTemperatureFeeds.delete(normalizedFeed);
+      await this.resolveOpenAlertsByMessage(deviceId, alertMessage);
+    }
+
+    return false;
+  }
+
+  private async applyLocalProtectionFanMax(params: {
+    deviceId: number | null;
+    deviceName: string;
+    sourceFeed: string;
+    currentTemperature: number;
+    maxTempSafe: number;
+  }): Promise<void> {
+    const fanFeed = await this.resolveControlFeed(params.deviceId, 'fan');
+    if (!fanFeed) return;
+
+    const currentFanLevel = this.findLatestFeedValue(fanFeed);
+    if (currentFanLevel === null || Math.round(currentFanLevel) < 100) {
+      await this.publishServerControl(fanFeed, 100);
+      this.tempHysteresisFanState.set(
+        `${params.deviceId ?? 'global'}:${fanFeed}`,
+        true,
+      );
+    }
+
+    const heaterFeed = await this.resolveControlFeed(params.deviceId, 'heater');
+    if (heaterFeed) {
+      const heaterLevel = this.findLatestFeedValue(heaterFeed);
+      if (heaterLevel === null || Math.round(heaterLevel) > 0) {
+        await this.publishServerControl(heaterFeed, 0);
+        this.heaterHysteresisState.set(
+          `${params.deviceId ?? 'global'}:${heaterFeed}`,
+          false,
+        );
+      }
+    }
+
+    this.logger.warn(
+      `${params.deviceName}: Bảo vệ cục bộ kích hoat tai ${params.sourceFeed} (${params.currentTemperature}°C > ${params.maxTempSafe}°C). Da gui lenh ep quat 100% va tat gia nhiet.`,
+    );
+  }
+
+  private async collectHealthyDeviceTemperatureValues(
+    deviceId: number | null,
+  ): Promise<number[]> {
+    const queryDevice = async (targetDeviceId: number | null) =>
+      this.prisma.device.findMany({
+        where: targetDeviceId ? { deviceID: targetDeviceId } : undefined,
+        select: {
+          mqttTopicSensor: true,
+          metaData: true,
+        },
+      });
+
+    let rows = await queryDevice(deviceId);
+    if (rows.length === 0 && deviceId) {
+      rows = await queryDevice(null);
+    }
+
+    const temperatureFeeds = new Set<string>();
+    for (const row of rows) {
+      const feeds = this.extractDeviceFeeds(row.mqttTopicSensor, row.metaData);
+      for (const feed of feeds) {
+        const metric = this.detectMetric(feed);
+        if (metric !== 'temperature') continue;
+        if (this.isActuatorLikeFeed(feed)) continue;
+        temperatureFeeds.add(feed);
+      }
+    }
+
+    const values: number[] = [];
+    for (const feed of temperatureFeeds) {
+      if (this.isTemperatureFeedMarkedFaulty(feed)) continue;
+      const current = this.findLatestFeedValue(feed);
+      if (!Number.isFinite(current)) continue;
+      if (this.isFaultTemperatureReading(current as number)) continue;
+      values.push(current as number);
+    }
+
+    return values;
+  }
+
+  private async applyAverageTemperatureHeaterControl(params: {
+    deviceId: number | null;
+    deviceName: string;
+    formulaThreshold: FormulaThresholdConfig;
+    thresholds: ThresholdConfig;
+  }): Promise<void> {
+    const mode = await this.modeControl.getCurrentMode();
+    if (mode !== 'auto') return;
+
+    const setpoint = Number(params.formulaThreshold.maxTemperature);
+    if (!Number.isFinite(setpoint)) return;
+
+    const heaterFeed = await this.resolveControlFeed(params.deviceId, 'heater');
+    if (!heaterFeed) return;
+
+    const values = await this.collectHealthyDeviceTemperatureValues(
+      params.deviceId,
+    );
+    if (values.length === 0) return;
+
+    const averageTemperature =
+      values.reduce((sum, item) => sum + item, 0) / values.length;
+    const delta = Math.max(0.5, params.thresholds.tempHysteresisDelta);
+
+    const stateKey = `${params.deviceId ?? 'global'}:${heaterFeed}`;
+    const currentHeaterLevel = this.findLatestFeedValue(heaterFeed);
+    const heaterOn = this.heaterHysteresisState.has(stateKey)
+      ? (this.heaterHysteresisState.get(stateKey) as boolean)
+      : Number.isFinite(currentHeaterLevel) &&
+        (currentHeaterLevel as number) > 0;
+
+    const shouldTurnOn = !heaterOn && averageTemperature < setpoint - delta;
+    const shouldTurnOff = heaterOn && averageTemperature > setpoint + delta;
+
+    if (!shouldTurnOn && !shouldTurnOff) {
+      this.heaterHysteresisState.set(stateKey, heaterOn);
+      return;
+    }
+
+    const nextValue = shouldTurnOn ? 1 : 0;
+    await this.publishServerControl(heaterFeed, nextValue);
+    this.heaterHysteresisState.set(stateKey, nextValue > 0);
+
+    this.logger.log(
+      `${params.deviceName}: Auto heater ${nextValue > 0 ? 'ON' : 'OFF'} theo trung bình nhiệt độ khỏe (${averageTemperature.toFixed(2)}°C, setpoint=${setpoint}°C, delta=${delta}°C, feed=${heaterFeed}).`,
+    );
+  }
+
+  private async evaluateDynamicFanRules(
+    feed: string,
+    value: unknown,
+  ): Promise<void> {
+    const incomingNumeric = Number(value);
+    if (!Number.isFinite(incomingNumeric)) return;
+
+    const metric = this.detectMetric(feed);
+    if (
+      metric === 'temperature' &&
+      (this.isFaultTemperatureReading(incomingNumeric) ||
+        this.isTemperatureFeedMarkedFaulty(feed))
+    ) {
+      return;
+    }
+
+    const rules = await this.getDynamicFanRules();
+    if (rules.length === 0) return;
+
+    const normalizedFeed = this.normalizeFeedKey(feed);
+    const matchedRules = rules.filter(
+      (rule) =>
+        rule.enabled &&
+        this.normalizeFeedKey(rule.sensorFeed) === normalizedFeed,
+    );
+
+    if (matchedRules.length === 0) return;
+
+    for (const rule of matchedRules) {
+      const matchedCondition =
+        rule.comparator === 'gte'
+          ? incomingNumeric >= rule.threshold
+          : incomingNumeric <= rule.threshold;
+
+      const nextLevel = matchedCondition ? rule.fanLevelOn : rule.fanLevelOff;
+      const currentLevel = this.findLatestFeedValue(rule.fanFeed);
+      if (currentLevel !== null && Math.round(currentLevel) === nextLevel) {
+        continue;
+      }
+
+      await this.publishServerControl(rule.fanFeed, nextLevel);
+
+      this.logger.log(
+        `Dynamic fan rule ${rule.id} (${rule.configKey}) applied: ${rule.sensorFeed}=${incomingNumeric} ${rule.comparator} ${rule.threshold} => ${rule.fanFeed}=${nextLevel}`,
+      );
+    }
+  }
+
   private async resolveDeviceByFeed(feed: string) {
     const mapped = await this.prisma.device.findFirst({
       where: {
@@ -937,11 +1548,20 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
           },
         },
         select: {
+          currentStage: true,
           currentStep: true,
           recipe: {
             select: {
               recipeName: true,
               recipeFruits: true,
+              stages: {
+                select: {
+                  stageOrder: true,
+                  temperatureSetpoint: true,
+                  humiditySetpoint: true,
+                },
+                orderBy: { stageOrder: 'asc' },
+              },
               steps: {
                 select: {
                   stepNo: true,
@@ -973,6 +1593,13 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       };
     }
 
+    const stageOrder = activeBatch.currentStage ?? 1;
+    const matchedStage =
+      activeBatch.recipe.stages.find(
+        (stage) => stage.stageOrder === stageOrder,
+      ) ?? activeBatch.recipe.stages[0];
+
+    // Backward compatibility for old recipes/batches that only have steps/currentStep.
     const stepNo = activeBatch.currentStep ?? 1;
     const matchedStep =
       activeBatch.recipe.steps.find((step) => step.stepNo === stepNo) ??
@@ -981,51 +1608,102 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     return resolveFormulaThreshold({
       recipeName: activeBatch.recipe.recipeName,
       recipeFruits: activeBatch.recipe.recipeFruits,
-      stepTemperatureGoal: matchedStep?.temperatureGoal,
-      stepHumidityGoal: matchedStep?.humidityGoal,
+      stepTemperatureGoal:
+        matchedStage?.temperatureSetpoint ?? matchedStep?.temperatureGoal,
+      stepHumidityGoal:
+        matchedStage?.humiditySetpoint ?? matchedStep?.humidityGoal,
     });
   }
 
-  private resolveFanLevelFeedFromMetricFeed(metricFeed: string): string {
-    const lower = metricFeed.toLowerCase();
+  private pickCommandFeedByTokens(
+    feeds: string[],
+    tokens: string[],
+  ): string | null {
+    for (const feed of feeds) {
+      const normalized = this.normalizeFeedKey(feed);
+      if (tokens.some((token) => normalized.includes(token))) {
+        return feed;
+      }
+    }
+    return null;
+  }
 
-    if (lower.includes('fan-level') || lower.includes('fan_level')) {
-      return metricFeed;
+  private async resolveControlFeed(
+    deviceId: number | null,
+    controlType: 'fan' | 'led' | 'heater',
+  ): Promise<string | null> {
+    const fallbackRaw =
+      controlType === 'fan'
+        ? this.parseFeedKey(this.fanLevelFeedKey)
+        : controlType === 'led'
+          ? this.parseFeedKey(this.ledFeedKey)
+          : null;
+    const fallback = fallbackRaw
+      ? this.canonicalizeActuatorFeedKey(fallbackRaw)
+      : null;
+
+    if (!deviceId) {
+      return fallback;
     }
 
-    // Shared-feed mode should always use the configured output feed.
-    if (
-      lower.includes('bbc_temp') ||
-      lower === 'temperature' ||
-      lower === 'temp'
-    ) {
-      return this.fanLevelFeedKey;
+    const row = await this.prisma.device.findUnique({
+      where: { deviceID: deviceId },
+      select: { mqttTopicCmd: true, mqttTopicSensor: true, metaData: true },
+    });
+
+    const commandFeeds = this.splitFeeds(row?.mqttTopicCmd ?? null);
+    const sensorFeeds = this.extractDeviceFeeds(
+      row?.mqttTopicSensor ?? null,
+      row?.metaData ?? null,
+    ).filter((feed) => this.isActuatorLikeFeed(feed));
+    const candidateFeeds = Array.from(
+      new Set([...commandFeeds, ...sensorFeeds]),
+    );
+
+    if (candidateFeeds.length === 0) return fallback;
+
+    if (controlType === 'fan') {
+      const selected =
+        this.pickCommandFeedByTokens(candidateFeeds, ['fanlevel', 'fan']) ||
+        fallback;
+      return selected ? this.canonicalizeActuatorFeedKey(selected) : null;
     }
 
-    // Per-machine topic pattern: drytech.<id>-temperature => drytech.<id>-fan-level
-    if (lower.startsWith('drytech.') && lower.includes('temperature')) {
-      return metricFeed.replace(/temperature/gi, 'fan-level');
+    if (controlType === 'heater') {
+      const selected =
+        this.pickCommandFeedByTokens(candidateFeeds, ['heater', 'heat']) ||
+        fallback;
+      return selected ? this.canonicalizeActuatorFeedKey(selected) : null;
     }
 
-    if (lower.startsWith('drytech.') && lower.includes('temp')) {
-      return metricFeed.replace(/temp/gi, 'fan-level');
-    }
-
-    return this.fanLevelFeedKey;
+    const selected =
+      this.pickCommandFeedByTokens(candidateFeeds, ['led']) || fallback;
+    return selected ? this.canonicalizeActuatorFeedKey(selected) : null;
   }
 
   private async publishServerControl(
     feed: string,
     value: number,
   ): Promise<void> {
-    const topic = this.toTopic(feed);
-    await this.saveState(feed, topic, value, 'server-command');
+    const normalizedFeed = this.canonicalizeActuatorFeedKey(
+      this.requireFeedKey(feed),
+    );
+
+    if (!(await this.isPublishFeedAllowed(normalizedFeed))) {
+      this.logger.warn(
+        `Bo qua publishServerControl cho feed ${normalizedFeed} vi feed nay khong duoc phep publish.`,
+      );
+      return;
+    }
+
+    const topic = this.toTopic(normalizedFeed);
+    await this.saveState(normalizedFeed, topic, value, 'server-command');
 
     await this.persistSensorLog({
       direction: 'outgoing',
       source: 'server-command',
       topic,
-      feed,
+      feed: normalizedFeed,
       value,
       raw: String(value),
     });
@@ -1063,17 +1741,30 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     const tempBaseThreshold = Number.isFinite(
       params.formulaThreshold.maxTemperature,
     )
-      ? (params.formulaThreshold.maxTemperature as number)
+      ? Math.min(
+          params.thresholds.maxTempSafe,
+          params.formulaThreshold.maxTemperature as number,
+        )
       : params.thresholds.maxTempSafe;
     const humBaseThreshold = Number.isFinite(
       params.formulaThreshold.maxHumidity,
     )
-      ? (params.formulaThreshold.maxHumidity as number)
+      ? Math.min(
+          params.thresholds.maxHumidity,
+          params.formulaThreshold.maxHumidity as number,
+        )
       : params.thresholds.maxHumidity;
 
     const tempDelta = Math.max(0, params.thresholds.tempHysteresisDelta);
     const humDelta = Math.max(0, params.thresholds.humidityHysteresisDelta);
-    const fanFeed = this.resolveFanLevelFeedFromMetricFeed(params.sourceFeed);
+    const fanFeed = await this.resolveControlFeed(params.deviceId, 'fan');
+    if (!fanFeed) {
+      this.logger.warn(
+        `${params.deviceName}: Bo qua auto dieu khien quat vi chua cau hinh fan feed.`,
+      );
+      return;
+    }
+
     const key = `${params.deviceId ?? 'global'}:${fanFeed}`;
     const currentFanLevel = Number(this.feedState.get(fanFeed)?.value);
 
@@ -1129,39 +1820,43 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
   private buildFormulaHumidityAlertMessage(
     deviceName: string,
     formula: FormulaThresholdConfig,
+    sensorFeedLabel?: string,
   ): string {
     const thresholdText = Number.isFinite(formula.maxHumidity)
       ? `${formula.maxHumidity}%`
       : 'ngưỡng công thức';
+    const feedText = sensorFeedLabel ? ` ${sensorFeedLabel}` : '';
 
     if (formula.recipeName) {
-      return `${deviceName}: Độ ẩm chưa đạt ngưỡng công thức (${formula.recipeName}, cần < ${thresholdText}).`;
+      return `${deviceName}: Cảm biến${feedText} vượt ngưỡng công thức (${formula.recipeName}, cần < ${thresholdText}).`;
     }
 
     if (formula.fruitType) {
-      return `${deviceName}: Độ ẩm chưa đạt ngưỡng công thức cho ${formula.fruitType} (cần < ${thresholdText}).`;
+      return `${deviceName}: Cảm biến${feedText} vượt ngưỡng công thức cho ${formula.fruitType} (cần < ${thresholdText}).`;
     }
 
-    return `${deviceName}: Độ ẩm chưa đạt ngưỡng công thức (cần < ${thresholdText}).`;
+    return `${deviceName}: Cảm biến${feedText} vượt ngưỡng công thức (cần < ${thresholdText}).`;
   }
 
   private buildFormulaTemperatureAlertMessage(
     deviceName: string,
     formula: FormulaThresholdConfig,
+    sensorFeedLabel?: string,
   ): string {
     const thresholdText = Number.isFinite(formula.maxTemperature)
       ? `${formula.maxTemperature}°C`
       : 'ngưỡng công thức';
+    const feedText = sensorFeedLabel ? ` ${sensorFeedLabel}` : '';
 
     if (formula.recipeName) {
-      return `${deviceName}: Nhiệt độ vượt ngưỡng công thức (${formula.recipeName}, > ${thresholdText}).`;
+      return `${deviceName}: Cảm biến${feedText} vượt ngưỡng công thức (${formula.recipeName}, > ${thresholdText}).`;
     }
 
     if (formula.fruitType) {
-      return `${deviceName}: Nhiệt độ vượt ngưỡng công thức cho ${formula.fruitType} (> ${thresholdText}).`;
+      return `${deviceName}: Cảm biến${feedText} vượt ngưỡng công thức cho ${formula.fruitType} (> ${thresholdText}).`;
     }
 
-    return `${deviceName}: Nhiệt độ vượt ngưỡng công thức (> ${thresholdText}).`;
+    return `${deviceName}: Cảm biến${feedText} vượt ngưỡng công thức (> ${thresholdText}).`;
   }
 
   private async autoStopBatchWhenSystemThresholdExceeded(params: {
@@ -1208,15 +1903,25 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       }),
     ]);
 
-    const fanFeed = this.resolveFanLevelFeedFromMetricFeed(params.sourceFeed);
-    await Promise.all([
-      this.publishServerControl(fanFeed, 0),
-      this.publishServerControl(this.ledFeedKey, 0),
+    const [fanFeed, ledFeed] = await Promise.all([
+      this.resolveControlFeed(params.deviceId, 'fan'),
+      this.resolveControlFeed(params.deviceId, 'led'),
     ]);
-    this.tempHysteresisFanState.set(
-      `${params.deviceId ?? 'global'}:${fanFeed}`,
-      false,
-    );
+
+    const stopCommands: Promise<void>[] = [];
+    if (fanFeed) {
+      stopCommands.push(this.publishServerControl(fanFeed, 0));
+      this.tempHysteresisFanState.set(
+        `${params.deviceId ?? 'global'}:${fanFeed}`,
+        false,
+      );
+    }
+    if (ledFeed) {
+      stopCommands.push(this.publishServerControl(ledFeed, 0));
+    }
+    if (stopCommands.length > 0) {
+      await Promise.all(stopCommands);
+    }
 
     await this.createPendingAlertIfNeeded(
       params.deviceId,
@@ -1366,6 +2071,47 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  private async resolveLegacyLocalProtectionAlerts(
+    deviceId: number | null,
+  ): Promise<void> {
+    const openAlerts = await this.prisma.alert.findMany({
+      where: {
+        deviceID: deviceId,
+        alertStatus: { in: ['pending', 'acknowledged'] },
+        alertMessage: {
+          contains: 'Bảo vệ cục bộ kích hoạt tại',
+          mode: 'insensitive',
+        },
+      },
+      select: { alertID: true },
+    });
+
+    if (openAlerts.length === 0) return;
+
+    await this.prisma.$transaction(
+      openAlerts.flatMap((alert) => [
+        this.prisma.alert.update({
+          where: { alertID: alert.alertID },
+          data: { alertStatus: 'resolved' },
+        }),
+        this.prisma.alertResolution.create({
+          data: {
+            alertID: alert.alertID,
+            resolveStatus: 'auto_resolved',
+            resolveNote:
+              'Tự động đóng để gộp về cùng condition nhiệt độ vượt ngưỡng an toàn.',
+            resolveTime: new Date(),
+          },
+        }),
+      ]),
+    );
+  }
+
+  private formatSensorFeedLabel(feed: string): string {
+    const parsed = this.parseFeedKey(feed) ?? feed;
+    return parsed.trim() || feed;
+  }
+
   private async saveState(
     feed: string,
     topic: string,
@@ -1439,6 +2185,13 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
   }
 
   private startLcdAutoPushLoop(): void {
+    if (!this.parseFeedKey(this.lcdFeedKey)) {
+      this.logger.warn(
+        'Bo qua auto-update LCD vi ADAFRUIT_IO_LCD_FEED chua duoc cau hinh.',
+      );
+      return;
+    }
+
     if (this.lcdAutoPushTimer) return;
 
     const run = () => {
@@ -1467,8 +2220,21 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     return text.slice(0, 16).padEnd(16, ' ');
   }
 
+  private isFeedLimitError(error: unknown): boolean {
+    const message =
+      error instanceof Error ? error.message : String(error ?? '');
+    const normalized = message.toLowerCase();
+    return (
+      normalized.includes('feed limit reached') ||
+      normalized.includes('validation failed')
+    );
+  }
+
   private async publishLcdSnapshot(): Promise<void> {
     if (!this.client || !this.isConnected) return;
+
+    const lcdFeed = this.parseFeedKey(this.lcdFeedKey);
+    if (!lcdFeed) return;
 
     const thresholds = await this.getThresholdConfig();
     const operatingMode = await this.modeControl.getCurrentMode();
@@ -1493,7 +2259,17 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
 
     this.publishingAutoLcd = true;
     try {
-      await this.publishCommand(this.lcdFeedKey, lcdMessage, true);
+      await this.publishCommand(lcdFeed, lcdMessage, true);
+    } catch (error) {
+      if (this.isFeedLimitError(error)) {
+        this.stopLcdAutoPushLoop();
+        this.logger.error(
+          `Dung auto-update LCD do vuot gioi han feed tren Adafruit IO (feed: ${this.lcdFeedKey}).`,
+        );
+        return;
+      }
+
+      throw error;
     } finally {
       this.publishingAutoLcd = false;
     }

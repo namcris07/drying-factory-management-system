@@ -1,10 +1,14 @@
 import {
+  IsArray,
   IsEmail,
+  IsInt,
   IsNotEmpty,
   IsOptional,
   IsString,
   MinLength,
+  ArrayUnique,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class CreateUserDto {
   @IsNotEmpty()
@@ -29,4 +33,11 @@ export class CreateUserDto {
 
   @IsOptional()
   phoneNumber?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @Type(() => Number)
+  @IsInt({ each: true })
+  chamberIDs?: number[];
 }

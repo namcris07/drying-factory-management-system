@@ -48,6 +48,23 @@ export default function RecipesPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [editingRecipe, setEditingRecipe] = useState<ApiRecipe | null>(null);
+  const watchedStages = Form.useWatch('stages', form);
+
+  const sumStageMinutes = (stages: Array<{ durationMinutes?: number }>) =>
+    stages.reduce((sum, stage) => {
+      const minutes = Number(stage.durationMinutes ?? 0);
+      return Number.isFinite(minutes) ? sum + minutes : sum;
+    }, 0);
+
+  const formatDuration = (minutes: number) => {
+    const totalMinutes = Math.max(1, Math.round(Number(minutes) || 0));
+    const hours = Math.floor(totalMinutes / 60);
+    const remainMinutes = totalMinutes % 60;
+
+    if (hours <= 0) return `${totalMinutes}m`;
+    if (remainMinutes === 0) return `${hours}h`;
+    return `${hours}h ${remainMinutes}m`;
+  };
 
   const loadRecipes = async () => {
     try {
@@ -62,12 +79,20 @@ export default function RecipesPage() {
 
   useEffect(() => { loadRecipes(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    const stages = Array.isArray(watchedStages)
+      ? (watchedStages as Array<{ durationMinutes?: number }>)
+      : [];
+    const total = sumStageMinutes(stages);
+    form.setFieldValue('timeDurationEst', Math.max(1, Math.round(total || 0)));
+  }, [form, watchedStages]);
+
   const openCreateModal = () => {
     setEditingRecipe(null);
     form.setFieldsValue({
       recipeName: '',
       recipeFruits: '',
-      timeDurationEst: 120,
+      timeDurationEst: 60,
       stages: [
         {
           stageOrder: 1,
@@ -94,7 +119,7 @@ export default function RecipesPage() {
     form.setFieldsValue({
       recipeName: recipe.recipeName ?? '',
       recipeFruits: recipe.recipeFruits ?? '',
-      timeDurationEst: recipe.timeDurationEst ?? 60,
+      timeDurationEst: sumStageMinutes(mappedStages) || recipe.timeDurationEst || 60,
       stages: mappedStages,
     });
     setIsModalOpen(true);
@@ -122,6 +147,7 @@ export default function RecipesPage() {
           (a: RecipeStagePayload, b: RecipeStagePayload) =>
             a.stageOrder - b.stageOrder,
         );
+      const totalStageMinutes = sumStageMinutes(normalizedStages);
 
       const derivedSteps: RecipeStepPayload[] = normalizedStages.map((stage) => ({
         stepNo: stage.stageOrder,
@@ -134,7 +160,9 @@ export default function RecipesPage() {
       const payload = {
         recipeName: String(values.recipeName).trim(),
         recipeFruits: String(values.recipeFruits ?? '').trim() || undefined,
-        timeDurationEst: Number(values.timeDurationEst),
+        timeDurationEst: totalStageMinutes > 0
+          ? totalStageMinutes
+          : Number(values.timeDurationEst),
         stages: normalizedStages,
         steps: derivedSteps,
       };
@@ -231,7 +259,29 @@ export default function RecipesPage() {
     {
       title: 'Thời gian ước tính',
       dataIndex: 'timeDurationEst',
-      render: (v: number) => v ? `${Math.round(v / 60)}h ${v % 60}m` : '—',
+      render: (v: number) => (v ? formatDuration(v) : '—'),
+    },
+    {
+      title: 'Đồng bộ TG',
+      key: 'durationConsistency',
+      render: (_: unknown, r: ApiRecipe) => {
+        const stageMinutes = sumStageMinutes(r.stages ?? []);
+        const estimatedMinutes = Number(r.timeDurationEst ?? 0);
+
+        if (stageMinutes <= 0 || !Number.isFinite(estimatedMinutes) || estimatedMinutes <= 0) {
+          return <Tag color="default">Chưa đủ dữ liệu</Tag>;
+        }
+
+        if (stageMinutes === estimatedMinutes) {
+          return <Tag color="success">Khớp</Tag>;
+        }
+
+        return (
+          <Tag color="warning">
+            Lệch: stage {formatDuration(stageMinutes)} / total {formatDuration(estimatedMinutes)}
+          </Tag>
+        );
+      },
     },
     {
       title: 'Số stage',
@@ -382,9 +432,8 @@ export default function RecipesPage() {
               <Form.Item
                 label="Tổng thời gian (phút)"
                 name="timeDurationEst"
-                rules={[{ required: true, message: 'Vui lòng nhập thời gian.' }]}
               >
-                <InputNumber min={1} style={{ width: '100%' }} />
+                <InputNumber min={1} style={{ width: '100%' }} disabled readOnly />
               </Form.Item>
             </Col>
           </Row>

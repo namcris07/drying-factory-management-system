@@ -8,19 +8,43 @@ import { UpdateUserDto } from './dto/update-user.dto';
 export class UsersService {
   constructor(private prisma: PrismaService) {}
 
+  private readonly userSelect = {
+    userID: true,
+    firstName: true,
+    lastName: true,
+    email: true,
+    role: true,
+    status: true,
+    createdAt: true,
+    phoneNumber: true,
+    zones: { select: { zoneID: true, zoneName: true } },
+  } as const;
+
+  private async assignZonesToOperator(
+    userID: number,
+    chamberIDs: number[],
+  ): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      if (chamberIDs.length > 0) {
+        await tx.zone.updateMany({
+          where: { zoneID: { in: chamberIDs } },
+          data: { userID },
+        });
+      }
+
+      await tx.zone.updateMany({
+        where: {
+          userID,
+          ...(chamberIDs.length > 0 ? { zoneID: { notIn: chamberIDs } } : {}),
+        },
+        data: { userID: null },
+      });
+    });
+  }
+
   findAll() {
     return this.prisma.user.findMany({
-      select: {
-        userID: true,
-        firstName: true,
-        lastName: true,
-        email: true,
-        role: true,
-        status: true,
-        createdAt: true,
-        phoneNumber: true,
-        zones: { select: { zoneID: true, zoneName: true } },
-      },
+      select: this.userSelect,
       orderBy: { userID: 'asc' },
     });
   }
@@ -28,16 +52,7 @@ export class UsersService {
   async findOne(id: number) {
     const user = await this.prisma.user.findUnique({
       where: { userID: id },
-      select: {
-        userID: true,
-        firstName: true,
-        lastName: true,
-        email: true,
-        role: true,
-        status: true,
-        createdAt: true,
-        zones: { select: { zoneID: true, zoneName: true } },
-      },
+      select: this.userSelect,
     });
     if (!user) throw new NotFoundException(`User ${id} not found`);
     return user;
@@ -45,7 +60,7 @@ export class UsersService {
 
   async create(dto: CreateUserDto) {
     const hashed = await bcrypt.hash(dto.password, 10);
-    return this.prisma.user.create({
+    const created = await this.prisma.user.create({
       data: {
         firstName: dto.firstName,
         lastName: dto.lastName,
@@ -56,16 +71,22 @@ export class UsersService {
         status: 'Active',
         createdAt: new Date(),
       },
-      select: {
-        userID: true,
-        firstName: true,
-        lastName: true,
-        email: true,
-        role: true,
-        status: true,
-        createdAt: true,
-      },
+      select: this.userSelect,
     });
+
+    const chamberIDs = Array.isArray(dto.chamberIDs)
+      ? Array.from(
+          new Set(
+            dto.chamberIDs.map((item) => Number(item)).filter(Number.isFinite),
+          ),
+        )
+      : [];
+
+    if (String(dto.role ?? '').toLowerCase() === 'operator') {
+      await this.assignZonesToOperator(created.userID, chamberIDs);
+    }
+
+    return this.findOne(created.userID);
   }
 
   async update(id: number, dto: UpdateUserDto) {
@@ -77,19 +98,30 @@ export class UsersService {
     if (dto.status !== undefined) data.status = dto.status;
     if (dto.password) data.password = await bcrypt.hash(dto.password, 10);
 
-    return this.prisma.user.update({
+    const updated = await this.prisma.user.update({
       where: { userID: id },
       data,
-      select: {
-        userID: true,
-        firstName: true,
-        lastName: true,
-        email: true,
-        role: true,
-        status: true,
-        createdAt: true,
-      },
+      select: this.userSelect,
     });
+
+    const nextRole = String(updated.role ?? '').toLowerCase();
+    if (nextRole === 'operator') {
+      if (dto.chamberIDs !== undefined) {
+        const chamberIDs = Array.from(
+          new Set(
+            dto.chamberIDs.map((item) => Number(item)).filter(Number.isFinite),
+          ),
+        );
+        await this.assignZonesToOperator(updated.userID, chamberIDs);
+      }
+    } else {
+      await this.prisma.zone.updateMany({
+        where: { userID: updated.userID },
+        data: { userID: null },
+      });
+    }
+
+    return this.findOne(updated.userID);
   }
 
   remove(id: number) {

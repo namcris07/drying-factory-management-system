@@ -11,7 +11,20 @@ export class AlertsService {
       where: status ? { alertStatus: status } : undefined,
       include: {
         device: { select: { deviceID: true, deviceName: true } },
-        alertResolutions: { orderBy: { resolveTime: 'desc' }, take: 1 },
+        alertResolutions: {
+          orderBy: { resolveTime: 'desc' },
+          take: 1,
+          include: {
+            user: {
+              select: {
+                userID: true,
+                firstName: true,
+                lastName: true,
+                email: true,
+              },
+            },
+          },
+        },
       },
       orderBy: { alertTime: 'desc' },
     });
@@ -49,18 +62,31 @@ export class AlertsService {
 
   async resolve(id: number, dto: ResolveAlertDto) {
     await this.findOne(id);
-    await this.prisma.alert.update({
-      where: { alertID: id },
-      data: { alertStatus: 'resolved' },
-    });
-    return this.prisma.alertResolution.create({
-      data: {
-        alertID: id,
-        userID: dto.userID,
-        resolveStatus: dto.resolveStatus,
-        resolveNote: dto.resolveNote,
-        resolveTime: new Date(),
-      },
+    return this.prisma.$transaction(async (tx) => {
+      await tx.alert.update({
+        where: { alertID: id },
+        data: { alertStatus: 'resolved' },
+      });
+
+      return tx.alertResolution.create({
+        data: {
+          alertID: id,
+          userID: dto.userID,
+          resolveStatus: dto.resolveStatus,
+          resolveNote: dto.resolveNote,
+          resolveTime: new Date(),
+        },
+        include: {
+          user: {
+            select: {
+              userID: true,
+              firstName: true,
+              lastName: true,
+              email: true,
+            },
+          },
+        },
+      });
     });
   }
 }

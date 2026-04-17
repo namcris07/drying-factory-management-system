@@ -12,8 +12,13 @@ export class CreateBatchDto {
   @IsInt()
   recipeID: number;
 
+  @IsOptional()
   @IsInt()
-  deviceID: number;
+  deviceID?: number;
+
+  @IsOptional()
+  @IsInt()
+  chamberID?: number;
 
   @IsDateString()
   startTime: string;

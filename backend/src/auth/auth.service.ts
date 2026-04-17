@@ -29,6 +29,9 @@ export class AuthService {
     const zoneNames = user.zones
       .map((z) => z.zoneName)
       .filter(Boolean) as string[];
+    const zones = user.zones
+      .filter((z) => Boolean(z.zoneName))
+      .map((z) => ({ zoneID: z.zoneID, zoneName: z.zoneName as string }));
     const zone =
       user.role === 'Admin' || user.role === 'Manager'
         ? 'All Zones'
@@ -39,6 +42,7 @@ export class AuthService {
       name,
       role: user.role,
       zone,
+      zones,
       email: user.email,
     };
   }

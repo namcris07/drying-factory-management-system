@@ -2,7 +2,7 @@
 
 /**
  * app/(operator)/operator/page.tsx
- * Operator Hub - Dashboard khu vực cho Operator
+ * Operator Hub - Dashboard cho Operator
  */
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -33,6 +33,8 @@ import {
 } from '@ant-design/icons';
 import { useOperatorContext } from '@/features/operator/model/operator-context';
 import { Machine, Recipe } from '@/features/operator/model/machine-data';
+import { filterMachinesByZone } from '@/features/operator/model/zone-utils';
+import { batchesApi } from '@/shared/lib/api';
 import { OperatingModeToggle } from './OperatingModeToggle';
 
 const { Title, Text } = Typography;
@@ -52,8 +54,9 @@ export default function OperatorHubPage() {
   const { message: messageApi } = App.useApp();
   const [quickStartMachine, setQuickStartMachine] = useState<Machine | null>(null);
   const [selectedRecipe, setSelectedRecipe] = useState<Recipe | null>(null);
+  const [quickStartLoading, setQuickStartLoading] = useState(false);
 
-  const zoneMachines = machines.filter(m => m.zone === zone);
+  const zoneMachines = filterMachinesByZone(machines, zone);
   const counts = {
     running: zoneMachines.filter(m => m.status === 'Running').length,
     idle: zoneMachines.filter(m => m.status === 'Idle').length,
@@ -62,9 +65,9 @@ export default function OperatorHubPage() {
   };
 
   const sensorLabel = (sensorType: string, feed: string) => {
-    if (sensorType === 'temperature') return 'Nhiet do';
-    if (sensorType === 'humidity') return 'Do am';
-    if (sensorType === 'light') return 'Anh sang';
+    if (sensorType === 'temperature') return 'Nhiệt độ';
+    if (sensorType === 'humidity') return 'Độ ẩm';
+    if (sensorType === 'light') return 'Ánh sáng';
     return feed;
   };
 
@@ -78,33 +81,69 @@ export default function OperatorHubPage() {
     return String(Math.round(num * 10) / 10);
   };
 
-  const handleQuickStart = () => {
+  const formatDuration = (minutes: number) => {
+    const totalMinutes = Math.max(1, Math.round(Number(minutes) || 0));
+    const hours = Math.floor(totalMinutes / 60);
+    const remainMinutes = totalMinutes % 60;
+
+    if (hours <= 0) return `${totalMinutes}m`;
+    if (remainMinutes === 0) return `${hours}h`;
+    return `${hours}h ${remainMinutes}m`;
+  };
+
+  const handleQuickStart = async () => {
     if (!selectedRecipe || !quickStartMachine) {
       messageApi.warning('Vui lòng chọn công thức!');
       return;
     }
-    const now = new Date();
-    const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-    setMachines(prev =>
-      prev.map(m =>
-        m.id === quickStartMachine.id
-          ? {
-              ...m,
-              status: 'Running' as const,
-              recipe: selectedRecipe.name,
-              recipeId: selectedRecipe.id,
-              progress: 0,
-              temp: selectedRecipe.temp,
-              humidity: selectedRecipe.humidity + 15,
-              startTime: timeStr,
-              doorOpen: false,
-            }
-          : m
-      )
-    );
-    messageApi.success(`🚀 Đã khởi động ${quickStartMachine.name} với công thức "${selectedRecipe.name}"!`);
-    setQuickStartMachine(null);
-    setSelectedRecipe(null);
+    if (!quickStartMachine.deviceID) {
+      messageApi.warning('Không xác định được buồng sấy để khởi động mẻ sấy.');
+      return;
+    }
+
+    setQuickStartLoading(true);
+    try {
+      await batchesApi.create({
+        recipeID: selectedRecipe.id,
+        chamberID: quickStartMachine.deviceID,
+        startTime: new Date().toISOString(),
+      });
+
+      const now = new Date();
+      const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now
+        .getMinutes()
+        .toString()
+        .padStart(2, '0')}`;
+
+      setMachines((prev) =>
+        prev.map((m) =>
+          m.id === quickStartMachine.id
+            ? {
+                ...m,
+                status: 'Running' as const,
+                recipe: selectedRecipe.name,
+                recipeId: selectedRecipe.id,
+                progress: 0,
+                startTime: timeStr,
+              }
+            : m,
+        ),
+      );
+
+      messageApi.success(
+        `Đã khởi động ${quickStartMachine.name} với công thức "${selectedRecipe.name}".`,
+      );
+      setQuickStartMachine(null);
+      setSelectedRecipe(null);
+    } catch (error) {
+      messageApi.error(
+        error instanceof Error
+          ? error.message
+          : 'Khởi động mẻ sấy thất bại.',
+      );
+    } finally {
+      setQuickStartLoading(false);
+    }
   };
 
   return (
@@ -131,9 +170,9 @@ export default function OperatorHubPage() {
           <div>
             <Title level={2} style={{ margin: 0 }}>
               <AppstoreOutlined style={{ marginRight: 10, color: '#1677ff' }} />
-              Giám sát {zone}
+              Dashboard Operator
             </Title>
-            <Text type="secondary">Danh sách thiết bị — cập nhật theo thời gian thực</Text>
+            <Text type="secondary">Danh sách buồng sấy trong zone được phân công — cập nhật theo thời gian thực</Text>
           </div>
 
           {/* Summary Pills */}
@@ -409,6 +448,7 @@ export default function OperatorHubPage() {
         okButtonProps={{ style: { background: '#52c41a', borderColor: '#52c41a', borderRadius: 7 } }}
         cancelButtonProps={{ style: { borderRadius: 7 } }}
         width={500}
+        confirmLoading={quickStartLoading}
         styles={{ body: { maxHeight: '65vh', overflowY: 'auto', paddingRight: 4 } }}
       >
         <div style={{ marginTop: 16 }}>
@@ -445,7 +485,7 @@ export default function OperatorHubPage() {
                         <Text type="secondary" style={{ fontSize: 12 }}>🍎 {recipe.fruit}</Text>
                       </div>
                     </div>
-                    <Tag style={{ borderRadius: 12 }}>{recipe.duration}h</Tag>
+                    <Tag style={{ borderRadius: 12 }}>{formatDuration(recipe.duration)}</Tag>
                   </div>
                 </Radio>
               ))}
@@ -455,7 +495,7 @@ export default function OperatorHubPage() {
           {selectedRecipe && (
             <div style={{ marginTop: 14, padding: '10px 14px', background: '#f6ffed', borderRadius: 10, border: '1px solid #b7eb8f' }}>
               <Text style={{ color: '#52c41a', fontSize: 13 }}>
-                ✓ Sẵn sàng khởi động với <strong>{selectedRecipe.name}</strong> — Thời gian dự kiến: {selectedRecipe.duration}h
+                ✓ Sẵn sàng khởi động với <strong>{selectedRecipe.name}</strong> — Thời gian dự kiến: {formatDuration(selectedRecipe.duration)}
               </Text>
             </div>
           )}

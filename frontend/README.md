@@ -56,7 +56,7 @@ Tạo file `frontend/.env.local`:
 
 ```env
 # Backend API base URL
-NEXT_PUBLIC_API_URL=http://localhost:3000/api
+NEXT_PUBLIC_API_URL=http://localhost:4001/api
 
 # Dùng cho module Adafruit IO (operator)
 NEXT_PUBLIC_AIO_USERNAME=your_adafruit_username
@@ -64,14 +64,14 @@ NEXT_PUBLIC_AIO_KEY=your_adafruit_aio_key
 ```
 
 Các fallback đang có trong code:
-- `NEXT_PUBLIC_API_URL` fallback -> `http://localhost:3000/api`
+- `NEXT_PUBLIC_API_URL` fallback -> `http://localhost:4001/api`
 - `NEXT_PUBLIC_AIO_USERNAME` fallback -> `YOUR_AIO_USERNAME`
 - `NEXT_PUBLIC_AIO_KEY` fallback -> `YOUR_AIO_KEY`
 
 ## 5. Cách frontend gọi backend
 
 Toàn bộ request HTTP đi qua `shared/lib/api.ts`:
-- `BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000/api'`
+- `BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4001/api'`
 - Hàm `request<T>()` dùng `fetch()` và ném `ApiError` khi response không thành công.
 
 Các API wrappers chính:

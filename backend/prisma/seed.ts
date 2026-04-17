@@ -110,8 +110,24 @@ async function main() {
       data: {
         zoneID: 1,
         zoneName: 'Zone A',
-        zoneDescription: 'Khu vực sấy chính - cụm máy A1/A2/A3',
+        zoneDescription: 'Khu sấy chính - chứa các buồng sấy A/B/C',
         userID: 3,
+      },
+    }),
+    prisma.zone.create({
+      data: {
+        zoneID: 2,
+        zoneName: 'Zone B',
+        zoneDescription: 'Khu sấy dự phòng / tăng cường công suất',
+        userID: null,
+      },
+    }),
+    prisma.zone.create({
+      data: {
+        zoneID: 3,
+        zoneName: 'Zone C',
+        zoneDescription: 'Khu sấy thử nghiệm / mẻ đặc biệt',
+        userID: null,
       },
     }),
   ]);
@@ -121,30 +137,106 @@ async function main() {
   const deviceData = [
     {
       id: 1,
-      name: 'Máy sấy A1',
-      type: 'Dryer',
+      name: 'Buồng sấy A',
+      type: 'DryingChamber',
       zoneID: 1,
-      sensor: 'drytech/zone-a/m-a1/sensor',
-      cmd: 'drytech/zone-a/m-a1/cmd',
+      sensor: 'drytech.m-a1-temp-in,drytech.m-a1-humidity-core,drytech.m-a1-light-door,drytech.m-a1-fan-1,drytech.m-a1-led,drytech.m-a1-lcd',
+      cmd: 'drytech.m-a1-fan-1,drytech.m-a1-led,drytech.m-a1-lcd',
       status: 'Active',
+      sensors: [
+        { sensorName: 'Nhiệt độ vào', sensorType: 'TemperatureSensor', feedKey: 'drytech.m-a1-temp-in', status: 'Active' },
+        { sensorName: 'Độ ẩm lõi', sensorType: 'HumiditySensor', feedKey: 'drytech.m-a1-humidity-core', status: 'Active' },
+        { sensorName: 'Ánh sáng cửa', sensorType: 'LightSensor', feedKey: 'drytech.m-a1-light-door', status: 'Active' },
+        { sensorName: 'Quạt chính', sensorType: 'Fan', feedKey: 'drytech.m-a1-fan-1', status: 'Active' },
+        { sensorName: 'LED trạng thái', sensorType: 'Custom', feedKey: 'drytech.m-a1-led', status: 'Active' },
+        { sensorName: 'LCD buồng', sensorType: 'Lcd', feedKey: 'drytech.m-a1-lcd', status: 'Active' },
+      ],
     },
     {
       id: 2,
-      name: 'Máy sấy A2',
-      type: 'Dryer',
+      name: 'Buồng sấy B',
+      type: 'DryingChamber',
       zoneID: 1,
-      sensor: 'drytech/zone-a/m-a2/sensor',
-      cmd: 'drytech/zone-a/m-a2/cmd',
+      sensor: 'drytech.m-a2-temp-in,drytech.m-a2-temp-core,drytech.m-a2-humidity-core,drytech.m-a2-fan-1,drytech.m-a2-fan-2,drytech.m-a2-led,drytech.m-a2-lcd',
+      cmd: 'drytech.m-a2-fan-1,drytech.m-a2-fan-2,drytech.m-a2-led,drytech.m-a2-lcd',
       status: 'Active',
+      sensors: [
+        { sensorName: 'Nhiệt độ vào', sensorType: 'TemperatureSensor', feedKey: 'drytech.m-a2-temp-in', status: 'Active' },
+        { sensorName: 'Nhiệt độ lõi', sensorType: 'TemperatureSensor', feedKey: 'drytech.m-a2-temp-core', status: 'Active' },
+        { sensorName: 'Độ ẩm lõi', sensorType: 'HumiditySensor', feedKey: 'drytech.m-a2-humidity-core', status: 'Active' },
+        { sensorName: 'Quạt chính', sensorType: 'Fan', feedKey: 'drytech.m-a2-fan-1', status: 'Active' },
+        { sensorName: 'Quạt phụ', sensorType: 'Fan', feedKey: 'drytech.m-a2-fan-2', status: 'Active' },
+        { sensorName: 'LED trạng thái', sensorType: 'Custom', feedKey: 'drytech.m-a2-led', status: 'Active' },
+        { sensorName: 'LCD buồng', sensorType: 'Lcd', feedKey: 'drytech.m-a2-lcd', status: 'Active' },
+      ],
     },
     {
       id: 3,
-      name: 'Máy sấy A3',
-      type: 'Dryer',
+      name: 'Buồng sấy C',
+      type: 'DryingChamber',
       zoneID: 1,
-      sensor: 'drytech/zone-a/m-a3/sensor',
-      cmd: 'drytech/zone-a/m-a3/cmd',
+      sensor: 'drytech.m-a3-temp-in,drytech.m-a3-temp-core,drytech.m-a3-humidity-core,drytech.m-a3-light-door,drytech.m-a3-fan-1,drytech.m-a3-led,drytech.m-a3-lcd',
+      cmd: 'drytech.m-a3-fan-1,drytech.m-a3-led,drytech.m-a3-lcd',
+      status: 'Active',
+      sensors: [
+        { sensorName: 'Nhiệt độ vào', sensorType: 'TemperatureSensor', feedKey: 'drytech.m-a3-temp-in', status: 'Active' },
+        { sensorName: 'Nhiệt độ lõi', sensorType: 'TemperatureSensor', feedKey: 'drytech.m-a3-temp-core', status: 'Active' },
+        { sensorName: 'Độ ẩm lõi', sensorType: 'HumiditySensor', feedKey: 'drytech.m-a3-humidity-core', status: 'Active' },
+        { sensorName: 'Ánh sáng cửa', sensorType: 'LightSensor', feedKey: 'drytech.m-a3-light-door', status: 'Active' },
+        { sensorName: 'Quạt chính', sensorType: 'Fan', feedKey: 'drytech.m-a3-fan-1', status: 'Active' },
+        { sensorName: 'LED trạng thái', sensorType: 'Custom', feedKey: 'drytech.m-a3-led', status: 'Active' },
+        { sensorName: 'LCD buồng', sensorType: 'Lcd', feedKey: 'drytech.m-a3-lcd', status: 'Active' },
+      ],
+    },
+    {
+      id: 4,
+      name: 'Buồng sấy B1',
+      type: 'DryingChamber',
+      zoneID: 2,
+      sensor: 'drytech.m-b1-temp-top,drytech.m-b1-humidity-top,drytech.m-b1-co2,drytech.m-b1-fan-1,drytech.m-b1-led,drytech.m-b1-lcd',
+      cmd: 'drytech.m-b1-fan-1,drytech.m-b1-led,drytech.m-b1-lcd',
       status: 'Maintenance',
+      sensors: [
+        { sensorName: 'Nhiệt độ trên', sensorType: 'TemperatureSensor', feedKey: 'drytech.m-b1-temp-top', status: 'Active' },
+        { sensorName: 'Độ ẩm trên', sensorType: 'HumiditySensor', feedKey: 'drytech.m-b1-humidity-top', status: 'Active' },
+        { sensorName: 'CO2', sensorType: 'Custom', feedKey: 'drytech.m-b1-co2', status: 'Maintenance' },
+        { sensorName: 'Quạt chính', sensorType: 'Fan', feedKey: 'drytech.m-b1-fan-1', status: 'Active' },
+        { sensorName: 'LED trạng thái', sensorType: 'Custom', feedKey: 'drytech.m-b1-led', status: 'Active' },
+        { sensorName: 'LCD buồng', sensorType: 'Lcd', feedKey: 'drytech.m-b1-lcd', status: 'Active' },
+      ],
+    },
+    {
+      id: 5,
+      name: 'Buồng sấy B2',
+      type: 'DryingChamber',
+      zoneID: 2,
+      sensor: 'drytech.m-b2-temp-bottom,drytech.m-b2-humidity-core,drytech.m-b2-fan-1,drytech.m-b2-led,drytech.m-b2-lcd',
+      cmd: 'drytech.m-b2-fan-1,drytech.m-b2-led,drytech.m-b2-lcd',
+      status: 'Active',
+      sensors: [
+        { sensorName: 'Nhiệt độ đáy', sensorType: 'TemperatureSensor', feedKey: 'drytech.m-b2-temp-bottom', status: 'Active' },
+        { sensorName: 'Độ ẩm lõi', sensorType: 'HumiditySensor', feedKey: 'drytech.m-b2-humidity-core', status: 'Active' },
+        { sensorName: 'Quạt chính', sensorType: 'Fan', feedKey: 'drytech.m-b2-fan-1', status: 'Active' },
+        { sensorName: 'LED trạng thái', sensorType: 'Custom', feedKey: 'drytech.m-b2-led', status: 'Active' },
+        { sensorName: 'LCD buồng', sensorType: 'Lcd', feedKey: 'drytech.m-b2-lcd', status: 'Active' },
+      ],
+    },
+    {
+      id: 6,
+      name: 'Buồng sấy C1',
+      type: 'DryingChamber',
+      zoneID: 3,
+      sensor: 'drytech.m-c1-temp-core,drytech.m-c1-humidity-core,drytech.m-c1-light-door,drytech.m-c1-fan-1,drytech.m-c1-led,drytech.m-c1-lcd',
+      cmd: 'drytech.m-c1-fan-1,drytech.m-c1-led,drytech.m-c1-lcd',
+      status: 'Active',
+      sensors: [
+        { sensorName: 'Nhiệt độ lõi', sensorType: 'TemperatureSensor', feedKey: 'drytech.m-c1-temp-core', status: 'Active' },
+        { sensorName: 'Độ ẩm lõi', sensorType: 'HumiditySensor', feedKey: 'drytech.m-c1-humidity-core', status: 'Active' },
+        { sensorName: 'Ánh sáng cửa', sensorType: 'LightSensor', feedKey: 'drytech.m-c1-light-door', status: 'Active' },
+        { sensorName: 'Quạt chính', sensorType: 'Fan', feedKey: 'drytech.m-c1-fan-1', status: 'Active' },
+        { sensorName: 'LED trạng thái', sensorType: 'Custom', feedKey: 'drytech.m-c1-led', status: 'Active' },
+        { sensorName: 'LCD buồng', sensorType: 'Lcd', feedKey: 'drytech.m-c1-lcd', status: 'Active' },
+      ],
     },
   ];
 
@@ -159,7 +251,7 @@ async function main() {
           zoneID: d.zoneID,
           mqttTopicSensor: d.sensor,
           mqttTopicCmd: d.cmd,
-          metaData: { firmware: 'v2.3.1' },
+          metaData: { firmware: 'v2.3.1', chamberDescription: d.name, sensors: d.sensors },
         },
       }),
     ),
@@ -298,7 +390,7 @@ async function main() {
 
     for (let slot = 0; slot < count; slot += 1) {
       const recipeID = ((dayIndex + slot) % recipeData.length) + 1;
-      const deviceID = slot % 7 === 6 ? 3 : slot % 3 === 2 ? 2 : 1;
+      const deviceID = (slot + dayIndex) % deviceData.length + 1;
       const startHour = 6 + ((slot * 2 + dayIndex) % 12);
       const startMinute = (slot % 4) * 15;
       const timeStamp = addDays(dayBase, 0, startHour, startMinute);

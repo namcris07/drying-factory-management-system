@@ -1,9 +1,11 @@
 export type UserRole = 'Admin' | 'Manager' | 'Operator';
 
 export interface AuthSession {
+  userID?: number;
   name: string;
   role: UserRole;
   zone?: string;
+  zones?: { zoneID: number; zoneName: string }[];
 }
 
 export const SESSION_STORAGE_KEY = 'drytechUser';
@@ -15,10 +17,21 @@ export function parseAuthSession(raw: string | null): AuthSession | null {
     const parsed = JSON.parse(raw) as Partial<AuthSession>;
     if (!parsed.name || !parsed.role) return null;
     if (!isUserRole(parsed.role)) return null;
+    const normalizedZones = Array.isArray(parsed.zones)
+      ? parsed.zones
+          .filter((z): z is { zoneID: number; zoneName: string } =>
+            Number.isFinite((z as { zoneID?: unknown }).zoneID) &&
+            typeof (z as { zoneName?: unknown }).zoneName === 'string',
+          )
+          .map((z) => ({ zoneID: Number(z.zoneID), zoneName: z.zoneName }))
+      : undefined;
+
     return {
+      ...(Number.isFinite(parsed.userID) ? { userID: Number(parsed.userID) } : {}),
       name: parsed.name,
       role: parsed.role,
       zone: parsed.zone,
+      ...(normalizedZones ? { zones: normalizedZones } : {}),
     };
   } catch {
     return null;
