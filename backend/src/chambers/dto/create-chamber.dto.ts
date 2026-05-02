@@ -38,6 +38,27 @@ export class ChamberSensorDto {
   status?: string;
 }
 
+export class ChamberActuatorDto {
+  @IsOptional()
+  @IsString()
+  actuatorName?: string;
+
+  @IsString()
+  @IsIn(['Fan', 'Heater', 'Pump', 'Led', 'Lcd', 'Custom'])
+  actuatorType!: string;
+
+  @IsString()
+  @Matches(/^[a-zA-Z0-9._/-]+$/, {
+    message: 'Feed key chỉ cho phép ký tự a-z, A-Z, 0-9, ., _, /, -',
+  })
+  feedKey!: string;
+
+  @IsOptional()
+  @IsString()
+  @IsIn(['Active', 'Inactive', 'Maintenance'])
+  status?: string;
+}
+
 export class CreateChamberDto {
   @IsNotEmpty()
   @IsString()
@@ -61,4 +82,16 @@ export class CreateChamberDto {
   @ValidateNested({ each: true })
   @Type(() => ChamberSensorDto)
   sensors?: ChamberSensorDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ChamberSensorDto)
+  sensorChannels?: ChamberSensorDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ChamberActuatorDto)
+  actuatorChannels?: ChamberActuatorDto[];
 }

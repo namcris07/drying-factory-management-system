@@ -280,7 +280,7 @@ export default function ZoneManagementPage() {
           dataSource={filteredZones}
           columns={columns}
           rowKey="zoneID"
-          pagination={false}
+          pagination={{ defaultPageSize: 10, showSizeChanger: true, pageSizeOptions: ['10', '20', '50'] }}
           locale={{ emptyText: <Empty description="Chưa có zone" /> }}
         />
       </Card>

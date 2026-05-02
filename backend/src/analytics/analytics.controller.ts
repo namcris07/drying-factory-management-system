@@ -53,4 +53,17 @@ export class AnalyticsController {
       metric,
     });
   }
+
+  @Get('mtbf')
+  getMtbf(
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('zoneId') zoneId?: string,
+  ) {
+    return this.analyticsService.getMtbf({
+      from,
+      to,
+      zoneId: zoneId ? Number(zoneId) : undefined,
+    });
+  }
 }

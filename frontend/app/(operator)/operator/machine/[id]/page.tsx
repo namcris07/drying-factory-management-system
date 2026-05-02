@@ -36,7 +36,6 @@ import {
   PauseCircleOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
-  SendOutlined,
   ThunderboltOutlined,
   ToolOutlined,
   WarningOutlined,
@@ -56,7 +55,7 @@ import { AIO_THRESHOLDS } from '@/features/operator/adafruit/config/adafruit-con
 import { resolveConfiguredMachineFeeds } from '@/features/operator/adafruit/config/adafruit-config';
 import { useAdafruitIO } from '@/features/operator/adafruit/model/use-adafruit-io';
 import { OperatingModeToggle } from '@/features/operator/dashboard/ui/OperatingModeToggle';
-import { batchesApi, systemConfigApi } from '@/shared/lib/api';
+import { batchesApi, mqttApi, systemConfigApi } from '@/shared/lib/api';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -64,6 +63,7 @@ const DOOR_OPEN_LUX = AIO_THRESHOLDS.lightDoor;
 const HEAT_LOSS_DELAY_MS = 20_000;
 const SENSOR_FAULT_TEMP_MIN = 5;
 const SENSOR_FAULT_TEMP_MAX = 120;
+const NODE_STALE_MS = 2 * 60 * 1000;
 
 type StageSetpoint = {
   stageOrder: number;
@@ -78,29 +78,49 @@ type CompletionNotice = {
   description: string;
 };
 
-type PanelMode = 'overview' | 'sensors' | 'fans';
+type PanelMode = 'overview' | 'sensors' | 'actuators' | 'rules';
+type ActuatorFilter = 'all' | 'fan' | 'pump' | 'led' | 'lcd' | 'heater' | 'humidifier' | 'other';
 
 type SensorNode = {
   key: string;
   feed: string;
+  sensorName?: string;
   sensorType: string;
   value: number | null;
   unit: string;
   updatedAt: string | null;
 };
 
-type DynamicFanComparator = 'gte' | 'lte';
+type ActuatorNode = {
+  key: string;
+  feed: string;
+  actuatorName?: string;
+  actuatorType: string;
+  /** Giá trị hiện tại (có thể là numeric hoặc string) */
+  value: unknown;
+  updatedAt: string | null;
+};
+
+type ActuatorKind = Exclude<ActuatorFilter, 'all'>;
+
+type DynamicControlComparator = 'gte' | 'lte';
+type DynamicFanComparator = DynamicControlComparator;
+
 
 type DynamicFanRule = {
   id: string;
   enabled: boolean;
+  category: 'critical' | 'normal';
   sensorFeed: string;
   comparator: DynamicFanComparator;
   threshold: number;
   fanFeed: string;
   fanLevelOn: number;
   fanLevelOff: number;
+  priority: number;
+  cooldownMs: number;
 };
+
 
 type DynamicFanRuleDraft = {
   sensorFeed: string;
@@ -109,7 +129,57 @@ type DynamicFanRuleDraft = {
   fanFeed: string;
   fanLevelOn: number;
   fanLevelOff: number;
+  priority: number;
+  cooldownMs: number;
 };
+
+type DynamicControlGroupOperator = 'AND' | 'OR';
+type DynamicFanGroupOperator = DynamicControlGroupOperator;
+
+type DynamicControlGroupCondition = {
+  sensorFeed: string;
+  comparator: DynamicControlComparator;
+  threshold: number;
+};
+
+type DynamicFanGroupCondition = DynamicControlGroupCondition;
+
+type DynamicFanGroupOutput = {
+  fanFeed: string;
+  fanLevelOn: number;
+  fanLevelOff: number;
+};
+
+
+type DynamicFanGroupRule = {
+  id: string;
+  enabled: boolean;
+  operator: DynamicFanGroupOperator;
+  conditions: DynamicFanGroupCondition[];
+  outputs: DynamicFanGroupOutput[];
+  priority: number;
+  cooldownMs: number;
+};
+
+
+type DynamicFanGroupDraft = {
+  operator: DynamicFanGroupOperator;
+  sensorFeed: string;
+  comparator: DynamicFanComparator;
+  threshold: number;
+  fanFeed: string;
+  fanLevelOn: number;
+  fanLevelOff: number;
+  priority: number;
+  cooldownMs: number;
+};
+
+type DynamicControlConflictSettings = {
+  defaultCooldownMs: number;
+  allowEqualPriorityTakeover: boolean;
+};
+
+type DynamicFanConflictSettings = DynamicControlConflictSettings;
 
 function inferDeviceId(machineCode: string): number | null {
   const m = machineCode.match(/(\d+)$/);
@@ -151,38 +221,30 @@ function toSensorLabel(sensorType: string) {
   return sensorType || 'Sensor';
 }
 
-function LcdDisplay({ message }: { message: string }) {
-  const lines = (message || ' ')
-    .padEnd(32, ' ')
-    .match(/.{1,16}/g) || ['                '];
+function getActuatorKind(actuatorType: string): ActuatorKind {
+  const type = String(actuatorType ?? '').toLowerCase();
+  if (type.includes('fan')) return 'fan';
+  if (type.includes('pump')) return 'pump';
+  if (type.includes('led')) return 'led';
+  if (type.includes('lcd')) return 'lcd';
+  if (type.includes('heater')) return 'heater';
+  if (type.includes('humidifier')) return 'humidifier';
+  return 'other';
+}
 
-  return (
-    <div
-      style={{
-        background: '#1a2a1a',
-        borderRadius: 6,
-        padding: '10px 14px',
-        border: '2px solid #3d5c3d',
-        fontFamily: '"Courier New", Courier, monospace',
-        boxShadow: 'inset 0 2px 8px rgba(0,0,0,0.6)',
-      }}
-    >
-      {lines.slice(0, 2).map((line, i) => (
-        <div
-          key={i}
-          style={{
-            color: '#7cfc00',
-            fontSize: 14,
-            letterSpacing: 2,
-            lineHeight: '22px',
-            minHeight: 22,
-          }}
-        >
-          {line}
-        </div>
-      ))}
-    </div>
-  );
+function coerceNumericValue(value: unknown): number | null {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function coerceSwitchValue(value: unknown): boolean {
+  if (value === true || value === 1) return true;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toUpperCase();
+    return normalized === '1' || normalized === 'ON' || normalized === 'TRUE';
+  }
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0;
 }
 
 export default function OperatorMachineDetailPage() {
@@ -190,8 +252,6 @@ export default function OperatorMachineDetailPage() {
   const params = useParams<{ id: string }>();
   const machineId = decodeURIComponent(params.id);
   const { message } = App.useApp();
-  const [lcdInput, setLcdInput] = useState('');
-  const [sendingLcd, setSendingLcd] = useState(false);
   const [nowSnapshot, setNowSnapshot] = useState<number>(() => Date.now());
   const [selectedRecipeId, setSelectedRecipeId] = useState<number | null>(null);
   const [heatLossDetected, setHeatLossDetected] = useState(false);
@@ -206,9 +266,11 @@ export default function OperatorMachineDetailPage() {
   const [currentStageSetpoint, setCurrentStageSetpoint] = useState<StageSetpoint | null>(null);
   const [pendingManualStageOrder, setPendingManualStageOrder] = useState<number | null>(null);
   const [completionNotice, setCompletionNotice] = useState<CompletionNotice | null>(null);
-  const [fanLevelDraft, setFanLevelDraft] = useState(0);
-  const [isAdjustingFan, setIsAdjustingFan] = useState(false);
   const [panelMode, setPanelMode] = useState<PanelMode>('overview');
+  const [actuatorFilter, setActuatorFilter] = useState<ActuatorFilter>('all');
+  const [actuatorBusyMap, setActuatorBusyMap] = useState<Record<string, boolean>>({});
+  const [actuatorLevelDraftMap, setActuatorLevelDraftMap] = useState<Record<string, number>>({});
+  const [lcdDraftByFeed, setLcdDraftByFeed] = useState<Record<string, string>>({});
   const [dynamicFanRules, setDynamicFanRules] = useState<DynamicFanRule[]>([]);
   const [ruleDraft, setRuleDraft] = useState<DynamicFanRuleDraft>({
     sensorFeed: '',
@@ -217,7 +279,26 @@ export default function OperatorMachineDetailPage() {
     fanFeed: '',
     fanLevelOn: 70,
     fanLevelOff: 0,
+    priority: 1000,
+    cooldownMs: 2000,
   });
+  const [dynamicFanGroups, setDynamicFanGroups] = useState<DynamicFanGroupRule[]>([]);
+  const [groupDraft, setGroupDraft] = useState<DynamicFanGroupDraft>({
+    operator: 'AND',
+    sensorFeed: '',
+    comparator: 'gte',
+    threshold: 60,
+    fanFeed: '',
+    fanLevelOn: 70,
+    fanLevelOff: 0,
+    priority: 200,
+    cooldownMs: 8000,
+  });
+  const [conflictSettings, setConflictSettings] =
+    useState<DynamicFanConflictSettings>({
+      defaultCooldownMs: 5000,
+      allowEqualPriorityTakeover: false,
+    });
   const [savingRules, setSavingRules] = useState(false);
   const [maxTempSafeThreshold, setMaxTempSafeThreshold] = useState(90);
   const [blinkOn, setBlinkOn] = useState(true);
@@ -258,8 +339,6 @@ export default function OperatorMachineDetailPage() {
     errorMsg,
     lastUpdated,
     setFanLevel,
-    setLed,
-    sendLcd,
     refresh,
   } = useAdafruitIO(feeds, {
     averageFeeds: machine?.sensorFeeds ?? [],
@@ -277,8 +356,16 @@ export default function OperatorMachineDetailPage() {
     );
   }, [machine?.sensorFeeds]);
 
-  const rulesConfigKey = useMemo(
+  const criticalRulesConfigKey = useMemo(
+    () => `operatorFanRules.${machineId}.criticalAtoms`,
+    [machineId],
+  );
+  const legacyRulesConfigKey = useMemo(
     () => `operatorFanRules.${machineId}`,
+    [machineId],
+  );
+  const groupRulesConfigKey = useMemo(
+    () => `operatorFanRuleGroups.${machineId}.normalGroups`,
     [machineId],
   );
 
@@ -294,9 +381,7 @@ export default function OperatorMachineDetailPage() {
   const hasTemperatureFeed = hasFeed(['temp', 'temperature']);
   const hasHumidityFeed = hasFeed(['humid', 'humidity']);
   const hasLightFeed = hasFeed(['light', 'lux']);
-  const hasLedFeed = hasFeed(['led']);
   const hasFanFeed = hasFeed(['fan']);
-  const hasLcdFeed = hasFeed(['lcd']);
 
   const sensorNodes = useMemo<SensorNode[]>(() => {
     const rows = machine?.sensorState ?? [];
@@ -306,6 +391,7 @@ export default function OperatorMachineDetailPage() {
       return {
         key: `${row.feed}-${row.sensorType}`,
         feed: row.feed,
+        sensorName: row.sensorName,
         sensorType: row.sensorType,
         value,
         unit: toSensorUnit(row.sensorType),
@@ -381,6 +467,100 @@ export default function OperatorMachineDetailPage() {
     return [];
   }, [feeds?.fanLevel, hasFanFeed, output.fanLevel, sensorNodes]);
 
+  const actuatorNodes = useMemo<ActuatorNode[]>(() => {
+    // Ưu tiên dùng actuatorState từ context (channel metadata)
+    const fromContext = machine?.actuatorState ?? [];
+    if (fromContext.length > 0) {
+      return fromContext.map((row, index) => ({
+        key: `${row.feed}-${row.actuatorType}-${index}`,
+        feed: row.feed,
+        actuatorName: row.actuatorName || row.actuatorType,
+        actuatorType: row.actuatorType,
+        value: row.value,
+        updatedAt: row.updatedAt,
+      }));
+    }
+
+    // Fallback: tìm từ sensorState có type là actuator-like
+    const ACTUATOR_TYPES = ['fan', 'led', 'lcd', 'pump', 'heater', 'humidifier'];
+    const isActuator = (type: string) =>
+      ACTUATOR_TYPES.some((t) => String(type).toLowerCase().includes(t));
+
+    const fromSensors = sensorNodes.filter((row) => isActuator(row.sensorType));
+    if (fromSensors.length > 0) {
+      return fromSensors.map((row) => ({
+        key: row.key,
+        feed: row.feed,
+        actuatorName: row.sensorName || row.sensorType,
+        actuatorType: row.sensorType,
+        value: row.value,
+        updatedAt: row.updatedAt,
+      }));
+    }
+
+    // Fallback cuối: dùng fanNodes nếu có để backward compat
+    return fanNodes.map((fan) => ({
+      key: fan.key,
+      feed: fan.feed,
+      actuatorName: fan.name,
+      actuatorType: 'Fan',
+      value: fan.level,
+      updatedAt: fan.updatedAt,
+    }));
+  }, [fanNodes, machine?.actuatorState, sensorNodes]);
+
+  /** Options cho rule: chấp hành mục tiêu */
+  const actuatorRuleOptions = useMemo(() => {
+    const feeds = Array.from(
+      new Set(actuatorNodes.map((node) => node.feed).filter(Boolean)),
+    );
+    return feeds.map((feed) => ({
+      value: feed,
+      label: `${feed}`,
+    }));
+  }, [actuatorNodes]);
+
+  const groupedActuatorNodes = useMemo(() => {
+    const groups: Record<ActuatorKind, ActuatorNode[]> = {
+      fan: [],
+      pump: [],
+      led: [],
+      lcd: [],
+      heater: [],
+      humidifier: [],
+      other: [],
+    };
+
+    for (const node of actuatorNodes) {
+      groups[getActuatorKind(node.actuatorType)].push(node);
+    }
+
+    return groups;
+  }, [actuatorNodes]);
+
+  const filteredActuatorNodes = useMemo(() => {
+    if (actuatorFilter === 'all') return actuatorNodes;
+    return actuatorNodes.filter((node) => getActuatorKind(node.actuatorType) === actuatorFilter);
+  }, [actuatorFilter, actuatorNodes]);
+
+  const groupedFilteredActuatorNodes = useMemo(() => {
+    const groups: Record<ActuatorKind, ActuatorNode[]> = {
+      fan: [],
+      pump: [],
+      led: [],
+      lcd: [],
+      heater: [],
+      humidifier: [],
+      other: [],
+    };
+
+    for (const node of filteredActuatorNodes) {
+      groups[getActuatorKind(node.actuatorType)].push(node);
+    }
+
+    return groups;
+  }, [filteredActuatorNodes]);
+
   const sensorSummary = useMemo(() => {
     const total = sensorNodes.length;
     const hasRecent = sensorNodes.filter((row) => row.updatedAt).length;
@@ -390,6 +570,31 @@ export default function OperatorMachineDetailPage() {
       offline: Math.max(0, total - hasRecent),
     };
   }, [sensorNodes]);
+
+  useEffect(() => {
+    setActuatorLevelDraftMap((prev) => {
+      const next = { ...prev };
+      for (const node of actuatorNodes) {
+        const kind = getActuatorKind(node.actuatorType);
+        if (kind !== 'fan') continue;
+        if (next[node.feed] !== undefined) continue;
+        const numeric = coerceNumericValue(node.value);
+        next[node.feed] = Math.max(0, Math.min(100, Math.round(numeric ?? 0)));
+      }
+      return next;
+    });
+
+    setLcdDraftByFeed((prev) => {
+      const next = { ...prev };
+      for (const node of actuatorNodes) {
+        const kind = getActuatorKind(node.actuatorType);
+        if (kind !== 'lcd') continue;
+        if (next[node.feed] !== undefined) continue;
+        next[node.feed] = typeof node.value === 'string' ? node.value : '';
+      }
+      return next;
+    });
+  }, [actuatorNodes]);
 
   const healthyTemperatureValues = useMemo(() => {
     return sensorNodes
@@ -486,6 +691,9 @@ export default function OperatorMachineDetailPage() {
           const threshold = Number(rule.threshold);
           const fanLevelOn = Number(rule.fanLevelOn);
           const fanLevelOff = Number(rule.fanLevelOff);
+          const priority = Number(rule.priority);
+          const cooldownMs = Number(rule.cooldownMs);
+          const categoryRaw = String(rule.category ?? 'critical').toLowerCase();
           const sensorFeed = String(rule.sensorFeed ?? '').trim();
           const fanFeed = String(rule.fanFeed ?? '').trim();
           if (!sensorFeed || !fanFeed) return null;
@@ -493,15 +701,84 @@ export default function OperatorMachineDetailPage() {
           return {
             id: String(rule.id ?? `rule-${index + 1}`),
             enabled: Boolean(rule.enabled),
+            category: categoryRaw === 'critical' ? 'critical' : 'normal',
             sensorFeed,
             comparator,
             threshold: Number.isFinite(threshold) ? threshold : 0,
             fanFeed,
             fanLevelOn: Number.isFinite(fanLevelOn) ? Math.max(0, Math.min(100, fanLevelOn)) : 70,
             fanLevelOff: Number.isFinite(fanLevelOff) ? Math.max(0, Math.min(100, fanLevelOff)) : 0,
+            priority: Number.isFinite(priority) ? Math.max(0, Math.round(priority)) : 1000,
+            cooldownMs: Number.isFinite(cooldownMs) ? Math.max(0, Math.round(cooldownMs)) : 2000,
           } as DynamicFanRule;
         })
         .filter((rule): rule is DynamicFanRule => Boolean(rule));
+    } catch {
+      return [];
+    }
+  };
+
+  const parseDynamicGroups = (raw: string | undefined): DynamicFanGroupRule[] => {
+    if (!raw) return [];
+
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .map((row, index) => {
+          if (!row || typeof row !== 'object') return null;
+          const group = row as Partial<DynamicFanGroupRule>;
+          const conditions = Array.isArray(group.conditions)
+            ? group.conditions
+                .map((condition) => {
+                  if (!condition || typeof condition !== 'object') return null;
+                  const c = condition as Partial<DynamicFanGroupCondition>;
+                  const sensorFeed = String(c.sensorFeed ?? '').trim();
+                  if (!sensorFeed) return null;
+                  const threshold = Number(c.threshold);
+                  return {
+                    sensorFeed,
+                    comparator: c.comparator === 'lte' ? 'lte' : 'gte',
+                    threshold: Number.isFinite(threshold) ? threshold : 0,
+                  } as DynamicFanGroupCondition;
+                })
+                .filter((condition): condition is DynamicFanGroupCondition => Boolean(condition))
+            : [];
+
+          const outputs = Array.isArray(group.outputs)
+            ? group.outputs
+                .map((output) => {
+                  if (!output || typeof output !== 'object') return null;
+                  const o = output as Partial<DynamicFanGroupOutput>;
+                  const fanFeed = String(o.fanFeed ?? '').trim();
+                  if (!fanFeed) return null;
+                  const on = Number(o.fanLevelOn);
+                  const off = Number(o.fanLevelOff);
+                  return {
+                    fanFeed,
+                    fanLevelOn: Number.isFinite(on) ? Math.max(0, Math.min(100, on)) : 70,
+                    fanLevelOff: Number.isFinite(off) ? Math.max(0, Math.min(100, off)) : 0,
+                  } as DynamicFanGroupOutput;
+                })
+                .filter((output): output is DynamicFanGroupOutput => Boolean(output))
+            : [];
+
+          if (conditions.length === 0 || outputs.length === 0) return null;
+
+          const priority = Number(group.priority);
+          const cooldownMs = Number(group.cooldownMs);
+
+          return {
+            id: String(group.id ?? `group-${index + 1}`),
+            enabled: Boolean(group.enabled),
+            operator: group.operator === 'AND' ? 'AND' : 'OR',
+            conditions,
+            outputs,
+            priority: Number.isFinite(priority) ? Math.max(0, Math.round(priority)) : 200,
+            cooldownMs: Number.isFinite(cooldownMs) ? Math.max(0, Math.round(cooldownMs)) : 8000,
+          } as DynamicFanGroupRule;
+        })
+        .filter((group): group is DynamicFanGroupRule => Boolean(group));
     } catch {
       return [];
     }
@@ -641,11 +918,6 @@ export default function OperatorMachineDetailPage() {
   const visibleHumiditySetpoint = isManualMode
     ? manualHumiditySetpoint
     : (autoHumiditySetpoint ?? manualHumiditySetpoint);
-
-  useEffect(() => {
-    if (isAdjustingFan) return;
-    setFanLevelDraft(hasFanFeed ? output.fanLevel : 0);
-  }, [hasFanFeed, isAdjustingFan, output.fanLevel]);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -839,7 +1111,10 @@ export default function OperatorMachineDetailPage() {
 
         const temp = Number(cfg.manualTargetTemp);
         const humidity = Number(cfg.manualTargetHumidity);
-        const loadedRules = parseDynamicRules(cfg[rulesConfigKey]);
+        const loadedRules = parseDynamicRules(
+          cfg[criticalRulesConfigKey] ?? cfg[legacyRulesConfigKey],
+        );
+        const loadedGroups = parseDynamicGroups(cfg[groupRulesConfigKey]);
 
         if (Number.isFinite(temp)) {
           setManualTempSetpoint(Math.max(30, Math.min(95, temp)));
@@ -852,6 +1127,17 @@ export default function OperatorMachineDetailPage() {
           setMaxTempSafeThreshold(maxTempSafe);
         }
         setDynamicFanRules(loadedRules);
+        setDynamicFanGroups(loadedGroups);
+        setConflictSettings({
+          defaultCooldownMs: Number.isFinite(
+            Number(cfg['operatorFanRuleConflict.defaultCooldownMs']),
+          )
+            ? Math.max(0, Math.round(Number(cfg['operatorFanRuleConflict.defaultCooldownMs'])))
+            : 5000,
+          allowEqualPriorityTakeover:
+            String(cfg['operatorFanRuleConflict.allowEqualPriorityTakeover'] ?? 'false') ===
+            'true',
+        });
       } catch {
         // Keep local defaults if config endpoint is temporarily unavailable.
       }
@@ -862,7 +1148,7 @@ export default function OperatorMachineDetailPage() {
     return () => {
       mounted = false;
     };
-  }, [rulesConfigKey]);
+  }, [criticalRulesConfigKey, groupRulesConfigKey, legacyRulesConfigKey]);
 
   useEffect(() => {
     if (ruleDraft.sensorFeed) return;
@@ -877,20 +1163,42 @@ export default function OperatorMachineDetailPage() {
     }));
   }, [fanRuleOptions, ruleDraft.sensorFeed, sensorRuleOptions]);
 
-  const persistDynamicRules = async (
+  useEffect(() => {
+    if (groupDraft.sensorFeed) return;
+    const nextSensorFeed = sensorRuleOptions[0]?.value ?? '';
+    const nextFanFeed = fanRuleOptions[0]?.value ?? '';
+    if (!nextSensorFeed && !nextFanFeed) return;
+
+    setGroupDraft((prev) => ({
+      ...prev,
+      sensorFeed: prev.sensorFeed || nextSensorFeed,
+      fanFeed: prev.fanFeed || nextFanFeed,
+    }));
+  }, [fanRuleOptions, groupDraft.sensorFeed, sensorRuleOptions]);
+
+  const persistHybridRules = async (
     nextRules: DynamicFanRule[],
+    nextGroups: DynamicFanGroupRule[],
+    nextConflict: DynamicFanConflictSettings,
     options?: { silent?: boolean },
   ) => {
     setSavingRules(true);
     try {
       await systemConfigApi.saveAll({
-        [rulesConfigKey]: JSON.stringify(nextRules),
+        [criticalRulesConfigKey]: JSON.stringify(nextRules),
+        [groupRulesConfigKey]: JSON.stringify(nextGroups),
+        'operatorFanRuleConflict.defaultCooldownMs': String(
+          Math.max(0, Math.round(nextConflict.defaultCooldownMs)),
+        ),
+        'operatorFanRuleConflict.allowEqualPriorityTakeover': String(
+          nextConflict.allowEqualPriorityTakeover,
+        ),
       });
       if (!options?.silent) {
-        message.success('Đã lưu rule động cho quạt.');
+        message.success('Đã lưu cấu hình hybrid rule cho operator.');
       }
     } catch {
-      message.error('Không thể lưu rule động của quạt.');
+      message.error('Không thể lưu cấu hình hybrid rule.');
     } finally {
       setSavingRules(false);
     }
@@ -953,10 +1261,7 @@ export default function OperatorMachineDetailPage() {
       return;
     }
 
-    setIsAdjustingFan(true);
-    setFanLevelDraft(manualRecommendedFanLevel);
     const ok = await setFanLevel(manualRecommendedFanLevel);
-    setIsAdjustingFan(false);
 
     if (ok) {
       message.success(
@@ -1114,68 +1419,88 @@ export default function OperatorMachineDetailPage() {
     const m = minutes % 60;
     return m === 0 ? `${h}h` : `${h}h${m}p`;
   };
-  const handleLedToggle = async (on: boolean) => {
-    if (!hasLedFeed) {
-      message.warning('Thiết bị chưa cấu hình feed LED.');
-      return;
-    }
-    if (!isManualMode) {
-      message.warning('Chế độ Auto: không thể điều khiển LED thủ công.');
-      return;
-    }
-    const ok = await setLed(on);
-    if (ok) {
-      message.info(`LED -> ${on ? 'BẬT' : 'TẮT'}`);
-      return;
-    }
 
-    message.error('Không đồng bộ được lệnh LED lên Adafruit IO.');
+  const updateActuatorValueLocally = (feed: string, value: unknown) => {
+    const nowIso = new Date().toISOString();
+    setMachines((prev) =>
+      prev.map((item) => {
+        if (item.id !== machineId) return item;
+
+        const actuatorState = item.actuatorState ?? [];
+        const hasActuatorState = actuatorState.some((node) => node.feed === feed);
+
+        return {
+          ...item,
+          actuatorState: hasActuatorState
+            ? actuatorState.map((node) =>
+                node.feed === feed ? { ...node, value, updatedAt: nowIso } : node,
+              )
+            : actuatorState,
+          sensorState: (item.sensorState ?? []).map((node) =>
+            node.feed === feed ? { ...node, value, updatedAt: nowIso } : node,
+          ),
+        };
+      }),
+    );
   };
 
-  const handleSendLcd = async () => {
-    if (!hasLcdFeed) {
-      message.warning('Thiết bị chưa cấu hình feed LCD.');
-      return;
+  const sendActuatorCommand = async (
+    feed: string,
+    value: unknown,
+    successMessage: string,
+  ) => {
+    if (!feed) {
+      message.warning('Thiết bị chưa cấu hình feed điều khiển.');
+      return false;
     }
     if (!isManualMode) {
-      message.warning('Chỉ có thể gửi tin nhắn LCD tùy chỉnh trong chế độ Manual.');
-      return;
+      message.warning('Chỉ điều khiển chấp hành thủ công trong chế độ Manual.');
+      return false;
     }
-    if (!lcdInput.trim()) {
+
+    setActuatorBusyMap((prev) => ({ ...prev, [feed]: true }));
+    try {
+      const result = await mqttApi.publishCommand(feed, value, true);
+      if (!result.ok) {
+        message.error(result.note ?? `Không gửi được lệnh tới feed ${feed}.`);
+        return false;
+      }
+
+      updateActuatorValueLocally(feed, value);
+      message.success(successMessage);
+      return true;
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : `Không gửi được lệnh tới feed ${feed}.`);
+      return false;
+    } finally {
+      setActuatorBusyMap((prev) => ({ ...prev, [feed]: false }));
+    }
+  };
+
+  const handleActuatorSwitch = async (
+    node: ActuatorNode,
+    nextOn: boolean,
+  ) => {
+    const label = node.actuatorName || toSensorLabel(node.actuatorType);
+    await sendActuatorCommand(node.feed, nextOn ? 1 : 0, `${label} -> ${nextOn ? 'BẬT' : 'TẮT'}`);
+  };
+
+  const handleActuatorFanCommit = async (node: ActuatorNode, rawLevel: number) => {
+    const nextLevel = Math.max(0, Math.min(100, Math.round(rawLevel)));
+    const label = node.actuatorName || 'Quạt';
+    await sendActuatorCommand(node.feed, nextLevel, `${label} -> ${nextLevel}%`);
+  };
+
+  const handleActuatorLcdSend = async (node: ActuatorNode) => {
+    const draft = (lcdDraftByFeed[node.feed] ?? '').trim().slice(0, 32);
+    if (!draft) {
       message.warning('Vui lòng nhập nội dung LCD.');
       return;
     }
-    setSendingLcd(true);
-    const ok = await sendLcd(lcdInput.trim().slice(0, 32));
-    if (ok) {
-      message.success(`Đã gửi lên LCD: ${lcdInput.trim().slice(0, 32)}`);
-    } else {
-      message.error('Không đồng bộ được nội dung LCD lên Adafruit IO.');
-    }
-    setSendingLcd(false);
-    setLcdInput('');
-  };
-
-  const handleQuickFanAction = async (nextLevel: number) => {
-    if (!hasFanFeed) {
-      message.warning('Buồng sấy chưa cấu hình feed quạt điều khiển.');
-      return;
-    }
-    if (!isManualMode) {
-      message.warning('Chỉ điều khiển quạt nhanh trong chế độ Manual.');
-      return;
-    }
-
-    setIsAdjustingFan(true);
-    setFanLevelDraft(nextLevel);
-    const ok = await setFanLevel(nextLevel);
-    setIsAdjustingFan(false);
-
-    if (ok) {
-      message.success(`Đã áp dụng quạt chính ${nextLevel}%.`);
-      return;
-    }
-    message.error('Không đồng bộ được lệnh quạt nhanh.');
+    const label = node.actuatorName || 'LCD';
+    const ok = await sendActuatorCommand(node.feed, draft, `${label} -> Đã gửi nội dung`);
+    if (!ok) return;
+    setLcdDraftByFeed((prev) => ({ ...prev, [node.feed]: '' }));
   };
 
   const handleAddDynamicRule = async () => {
@@ -1193,17 +1518,20 @@ export default function OperatorMachineDetailPage() {
     const nextRule: DynamicFanRule = {
       id: `R${Date.now().toString(36).toUpperCase()}`,
       enabled: true,
+      category: 'critical',
       sensorFeed,
       comparator: ruleDraft.comparator,
       threshold: Number(ruleDraft.threshold),
       fanFeed,
       fanLevelOn: Math.max(0, Math.min(100, Number(ruleDraft.fanLevelOn))),
       fanLevelOff: Math.max(0, Math.min(100, Number(ruleDraft.fanLevelOff))),
+      priority: Math.max(0, Math.round(Number(ruleDraft.priority))),
+      cooldownMs: Math.max(0, Math.round(Number(ruleDraft.cooldownMs))),
     };
 
     const nextRules = [...dynamicFanRules, nextRule];
     setDynamicFanRules(nextRules);
-    await persistDynamicRules(nextRules);
+    await persistHybridRules(nextRules, dynamicFanGroups, conflictSettings);
   };
 
   const handleToggleDynamicRule = async (id: string, enabled: boolean) => {
@@ -1211,13 +1539,74 @@ export default function OperatorMachineDetailPage() {
       rule.id === id ? { ...rule, enabled } : rule,
     );
     setDynamicFanRules(nextRules);
-    await persistDynamicRules(nextRules, { silent: true });
+    await persistHybridRules(nextRules, dynamicFanGroups, conflictSettings, {
+      silent: true,
+    });
   };
 
   const handleDeleteDynamicRule = async (id: string) => {
     const nextRules = dynamicFanRules.filter((rule) => rule.id !== id);
     setDynamicFanRules(nextRules);
-    await persistDynamicRules(nextRules);
+    await persistHybridRules(nextRules, dynamicFanGroups, conflictSettings);
+  };
+
+  const handleAddGroupRule = async () => {
+    const sensorFeed = groupDraft.sensorFeed.trim();
+    const fanFeed = groupDraft.fanFeed.trim();
+    if (!sensorFeed) {
+      message.warning('Vui lòng chọn cảm biến điều kiện cho rule group.');
+      return;
+    }
+    if (!fanFeed) {
+      message.warning('Vui lòng chọn quạt đầu ra cho rule group.');
+      return;
+    }
+
+    const nextGroup: DynamicFanGroupRule = {
+      id: `G${Date.now().toString(36).toUpperCase()}`,
+      enabled: true,
+      operator: groupDraft.operator,
+      conditions: [
+        {
+          sensorFeed,
+          comparator: groupDraft.comparator,
+          threshold: Number(groupDraft.threshold),
+        },
+      ],
+      outputs: [
+        {
+          fanFeed,
+          fanLevelOn: Math.max(0, Math.min(100, Number(groupDraft.fanLevelOn))),
+          fanLevelOff: Math.max(0, Math.min(100, Number(groupDraft.fanLevelOff))),
+        },
+      ],
+      priority: Math.max(0, Math.round(Number(groupDraft.priority))),
+      cooldownMs: Math.max(0, Math.round(Number(groupDraft.cooldownMs))),
+    };
+
+    const nextGroups = [...dynamicFanGroups, nextGroup];
+    setDynamicFanGroups(nextGroups);
+    await persistHybridRules(dynamicFanRules, nextGroups, conflictSettings);
+  };
+
+  const handleToggleGroupRule = async (id: string, enabled: boolean) => {
+    const nextGroups = dynamicFanGroups.map((group) =>
+      group.id === id ? { ...group, enabled } : group,
+    );
+    setDynamicFanGroups(nextGroups);
+    await persistHybridRules(dynamicFanRules, nextGroups, conflictSettings, {
+      silent: true,
+    });
+  };
+
+  const handleDeleteGroupRule = async (id: string) => {
+    const nextGroups = dynamicFanGroups.filter((group) => group.id !== id);
+    setDynamicFanGroups(nextGroups);
+    await persistHybridRules(dynamicFanRules, nextGroups, conflictSettings);
+  };
+
+  const handleSaveConflictSettings = async () => {
+    await persistHybridRules(dynamicFanRules, dynamicFanGroups, conflictSettings);
   };
 
   return (
@@ -1443,7 +1832,8 @@ export default function OperatorMachineDetailPage() {
                 options={[
                   { label: 'Tổng quan', value: 'overview' },
                   { label: 'Cảm biến', value: 'sensors' },
-                  { label: 'Quạt', value: 'fans' },
+                  { label: 'Chấp hành', value: 'actuators' },
+                  { label: 'Quy tắc', value: 'rules' },
                 ]}
               />
 
@@ -1524,6 +1914,11 @@ export default function OperatorMachineDetailPage() {
                             const isTempSensor = normalizeFeedName(row.sensorType).includes('temp');
                             const hasNumericValue = Number.isFinite(row.value);
                             const tempValue = hasNumericValue ? (row.value as number) : null;
+                            const updatedAtMs = row.updatedAt ? new Date(row.updatedAt).getTime() : null;
+                            const isMissing =
+                              !hasNumericValue ||
+                              updatedAtMs === null ||
+                              nowSnapshot - updatedAtMs > NODE_STALE_MS;
                             const isFaulty =
                               isTempSensor &&
                               tempValue !== null &&
@@ -1535,25 +1930,43 @@ export default function OperatorMachineDetailPage() {
                               tempValue > maxTempSafeThreshold;
                             const pulseDanger = isCritical && blinkOn;
 
+                            const cardTone = isFaulty || isCritical
+                              ? {
+                                  borderColor: '#ff4d4f',
+                                  background: '#fff1f0',
+                                  boxShadow: pulseDanger
+                                    ? '0 0 0 2px rgba(255,77,79,0.18), 0 0 18px rgba(255,77,79,0.28)'
+                                    : '0 0 0 1px rgba(255,77,79,0.16)',
+                                }
+                              : isMissing
+                                ? {
+                                    borderColor: '#faad14',
+                                    background: '#fffbe6',
+                                    boxShadow: '0 0 0 1px rgba(250,173,20,0.15)',
+                                  }
+                                : {
+                                    borderColor: '#91caff',
+                                    background: '#e6f4ff',
+                                    boxShadow: '0 0 0 1px rgba(22,119,255,0.16)',
+                                  };
+
                             return (
                             <Col xs={24} md={12} xl={8} key={row.key}>
                               <Card
                                 size='small'
-                                style={
-                                  pulseDanger
-                                    ? {
-                                        borderColor: '#ff4d4f',
-                                        boxShadow: '0 0 0 2px rgba(255,77,79,0.18), 0 0 18px rgba(255,77,79,0.28)',
-                                      }
-                                    : undefined
-                                }
+                                style={cardTone}
                               >
                                 <Space direction='vertical' size={2} style={{ width: '100%' }}>
-                                  <Text strong>{toSensorLabel(row.sensorType)}</Text>
-                                  <Text type='secondary'>{row.feed}</Text>
+                                  <Text strong>{row.sensorName || toSensorLabel(row.sensorType)}</Text>
+                                  <Text type='secondary'>
+                                    {toSensorLabel(row.sensorType)} · {row.feed}
+                                  </Text>
                                   <Text>
                                     {row.value ?? '--'} {row.unit}
                                   </Text>
+                                  {isMissing ? (
+                                    <Tag color='warning'>Thiếu dữ liệu hoặc node quá hạn cập nhật</Tag>
+                                  ) : null}
                                   {isFaulty ? (
                                     <Tag color='warning'>Sensor lỗi dải: loại khỏi trung bình</Tag>
                                   ) : null}
@@ -1578,46 +1991,216 @@ export default function OperatorMachineDetailPage() {
                 </Space>
               ) : null}
 
-              {panelMode === 'fans' ? (
+              {panelMode === 'actuators' ? (
                 <Space direction='vertical' size={12} style={{ width: '100%' }}>
-                  <Space wrap>
-                    <Button
-                      size='small'
-                      disabled={!isManualMode || !hasFanFeed}
-                      loading={isAdjustingFan}
-                      onClick={() => void handleQuickFanAction(30)}
-                    >
-                      Quạt 30%
-                    </Button>
-                    <Button
-                      size='small'
-                      disabled={!isManualMode || !hasFanFeed}
-                      loading={isAdjustingFan}
-                      onClick={() => void handleQuickFanAction(60)}
-                    >
-                      Quạt 60%
-                    </Button>
-                    <Button
-                      size='small'
-                      disabled={!isManualMode || !hasFanFeed}
-                      loading={isAdjustingFan}
-                      onClick={() => void handleQuickFanAction(100)}
-                    >
-                      Quạt 100%
-                    </Button>
-                    <Button
-                      size='small'
-                      danger
-                      disabled={!isManualMode || !hasFanFeed}
-                      loading={isAdjustingFan}
-                      onClick={() => void handleQuickFanAction(0)}
-                    >
-                      Tắt quạt
-                    </Button>
-                  </Space>
+                  <Alert
+                    type={isManualMode ? 'success' : 'warning'}
+                    showIcon
+                    message={isManualMode
+                      ? 'Chế độ Manual: cho phép điều khiển từng chấp hành theo feed.'
+                      : 'Chế độ Auto: chỉ giám sát trạng thái chấp hành, không cho phép điều khiển thủ công.'}
+                  />
 
-                  <Card size='small' title='Rule động cảm biến -> quạt'>
+                  <Segmented<ActuatorFilter>
+                    block
+                    value={actuatorFilter}
+                    onChange={(value) => setActuatorFilter(value as ActuatorFilter)}
+                    options={[
+                      { label: `Tất cả (${actuatorNodes.length})`, value: 'all' },
+                      { label: `Quạt (${groupedActuatorNodes.fan.length})`, value: 'fan' },
+                      { label: `Bơm (${groupedActuatorNodes.pump.length})`, value: 'pump' },
+                      { label: `LED (${groupedActuatorNodes.led.length})`, value: 'led' },
+                      { label: `LCD (${groupedActuatorNodes.lcd.length})`, value: 'lcd' },
+                      { label: `Khác (${groupedActuatorNodes.other.length})`, value: 'other' },
+                    ]}
+                  />
+
+                  {actuatorNodes.length === 0 ? (
+                    <Empty
+                      description='Chưa phát hiện thiết bị chấp hành nào. Vui lòng cấu hình actuator channel cho thiết bị này.'
+                    />
+                  ) : (
+                    <>
+                      <Text type='secondary' style={{ fontSize: 13 }}>
+                        Hiển thị {filteredActuatorNodes.length}/{actuatorNodes.length} chấp hành theo bộ lọc.
+                      </Text>
+                      {([
+                        'fan',
+                        'pump',
+                        'led',
+                        'lcd',
+                        'heater',
+                        'humidifier',
+                        'other',
+                      ] as ActuatorKind[]).map((kind) => {
+                        const nodes = groupedFilteredActuatorNodes[kind];
+                        if (nodes.length === 0) return null;
+
+                        const titleMap: Record<ActuatorKind, string> = {
+                          fan: 'Nhóm quạt',
+                          pump: 'Nhóm bơm',
+                          led: 'Nhóm LED',
+                          lcd: 'Nhóm LCD',
+                          heater: 'Nhóm gia nhiệt',
+                          humidifier: 'Nhóm tạo ẩm',
+                          other: 'Nhóm khác',
+                        };
+                        const colorMap: Record<ActuatorKind, string> = {
+                          fan: 'blue',
+                          pump: 'geekblue',
+                          led: 'gold',
+                          lcd: 'cyan',
+                          heater: 'volcano',
+                          humidifier: 'green',
+                          other: 'purple',
+                        };
+
+                        return (
+                          <Card key={kind} size='small' title={`${titleMap[kind]} (${nodes.length})`}>
+                            <Row gutter={[12, 12]}>
+                              {nodes.map((node, index) => {
+                                const numericVal = coerceNumericValue(node.value);
+                                const isOn = coerceSwitchValue(node.value);
+                                const isBusy = Boolean(actuatorBusyMap[node.feed]);
+                                const fanDraft = actuatorLevelDraftMap[node.feed] ?? Math.max(0, Math.min(100, Math.round(numericVal ?? 0)));
+                                const lcdDraft = lcdDraftByFeed[node.feed] ?? '';
+
+                                return (
+                                  <Col xs={24} md={12} xl={8} key={node.key}>
+                                    <Card size='small'>
+                                      <Space direction='vertical' size={8} style={{ width: '100%' }}>
+                                        <Space size={6} wrap>
+                                          <Text strong>{node.actuatorName || titleMap[kind]} {index + 1}</Text>
+                                          <Tag color={colorMap[kind]}>{titleMap[kind]}</Tag>
+                                        </Space>
+                                        <Text type='secondary'>{node.feed}</Text>
+                                        <Text>
+                                          {numericVal !== null ? numericVal.toFixed(1) : String(node.value ?? '--')}
+                                          {kind === 'fan' && numericVal !== null ? '%' : ''}
+                                        </Text>
+
+                                        {kind === 'fan' ? (
+                                          <>
+                                            <Slider
+                                              min={0}
+                                              max={100}
+                                              step={1}
+                                              value={fanDraft}
+                                              disabled={!isManualMode || isBusy}
+                                              onChange={(value) => {
+                                                if (typeof value !== 'number') return;
+                                                setActuatorLevelDraftMap((prev) => ({
+                                                  ...prev,
+                                                  [node.feed]: value,
+                                                }));
+                                              }}
+                                              onChangeComplete={(value) => {
+                                                if (typeof value !== 'number') return;
+                                                void handleActuatorFanCommit(node, value);
+                                              }}
+                                            />
+                                            <Space wrap>
+                                              <Button
+                                                size='small'
+                                                disabled={!isManualMode || isBusy}
+                                                onClick={() => {
+                                                  setActuatorLevelDraftMap((prev) => ({ ...prev, [node.feed]: 0 }));
+                                                  void handleActuatorFanCommit(node, 0);
+                                                }}
+                                              >
+                                                0%
+                                              </Button>
+                                              <Button
+                                                size='small'
+                                                disabled={!isManualMode || isBusy}
+                                                onClick={() => {
+                                                  setActuatorLevelDraftMap((prev) => ({ ...prev, [node.feed]: 50 }));
+                                                  void handleActuatorFanCommit(node, 50);
+                                                }}
+                                              >
+                                                50%
+                                              </Button>
+                                              <Button
+                                                size='small'
+                                                disabled={!isManualMode || isBusy}
+                                                onClick={() => {
+                                                  setActuatorLevelDraftMap((prev) => ({ ...prev, [node.feed]: 100 }));
+                                                  void handleActuatorFanCommit(node, 100);
+                                                }}
+                                              >
+                                                100%
+                                              </Button>
+                                            </Space>
+                                          </>
+                                        ) : null}
+
+                                        {kind === 'lcd' ? (
+                                          <>
+                                            <TextArea
+                                              rows={2}
+                                              maxLength={64}
+                                              value={lcdDraft}
+                                              onChange={(e) =>
+                                                setLcdDraftByFeed((prev) => ({
+                                                  ...prev,
+                                                  [node.feed]: e.target.value,
+                                                }))
+                                              }
+                                              disabled={!isManualMode || isBusy}
+                                              placeholder='Nhập tối đa 32 ký tự...'
+                                            />
+                                            <Button
+                                              type='primary'
+                                              size='small'
+                                              loading={isBusy}
+                                              disabled={!isManualMode || !lcdDraft.trim()}
+                                              onClick={() => void handleActuatorLcdSend(node)}
+                                            >
+                                              Gửi LCD
+                                            </Button>
+                                          </>
+                                        ) : null}
+
+                                        {kind !== 'fan' && kind !== 'lcd' ? (
+                                          <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                                            <Tag color={isOn ? 'success' : 'default'}>
+                                              {isOn ? 'Đang bật' : 'Đang tắt'}
+                                            </Tag>
+                                            <Switch
+                                              checked={isOn}
+                                              loading={isBusy}
+                                              disabled={!isManualMode || isBusy}
+                                              onChange={(checked) => {
+                                                void handleActuatorSwitch(node, checked);
+                                              }}
+                                            />
+                                          </Space>
+                                        ) : null}
+
+                                        <Text type='secondary' style={{ fontSize: 12 }}>
+                                          {node.updatedAt
+                                            ? dayjs(node.updatedAt).format('HH:mm:ss DD/MM')
+                                            : 'Chưa có dữ liệu'}
+                                        </Text>
+                                      </Space>
+                                    </Card>
+                                  </Col>
+                                );
+                              })}
+                            </Row>
+                          </Card>
+                        );
+                      })}
+                    </>
+                  )}
+                </Space>
+              ) : null}
+
+              {panelMode === 'rules' ? (
+                <Space direction='vertical' size={12} style={{ width: '100%' }}>
+                  <Card size='small' title='Rule động cảm biến → chấp hành'>
                     <Space direction='vertical' size={10} style={{ width: '100%' }}>
+                      <Text strong>1) Quy tắc hoạt động</Text>
                       <Row gutter={[8, 8]}>
                         <Col xs={24} md={10}>
                           <Select
@@ -1662,9 +2245,9 @@ export default function OperatorMachineDetailPage() {
                         <Col xs={24} md={6}>
                           <Select
                             style={{ width: '100%' }}
-                            placeholder='Chọn quạt đích'
+                            placeholder='Chọn chấp hành đích'
                             value={ruleDraft.fanFeed || undefined}
-                            options={fanRuleOptions}
+                            options={actuatorRuleOptions.length > 0 ? actuatorRuleOptions : fanRuleOptions}
                             onChange={(value) =>
                               setRuleDraft((prev) => ({ ...prev, fanFeed: value }))
                             }
@@ -1703,6 +2286,34 @@ export default function OperatorMachineDetailPage() {
                             }
                           />
                         </Col>
+                        <Col xs={24} md={4}>
+                          <InputNumber
+                            min={0}
+                            style={{ width: '100%' }}
+                            value={ruleDraft.priority}
+                            addonBefore='Ưu tiên'
+                            onChange={(value) =>
+                              setRuleDraft((prev) => ({
+                                ...prev,
+                                priority: Number(value ?? 0),
+                              }))
+                            }
+                          />
+                        </Col>
+                        <Col xs={24} md={4}>
+                          <InputNumber
+                            min={0}
+                            style={{ width: '100%' }}
+                            value={ruleDraft.cooldownMs}
+                            addonBefore='Cooldown'
+                            onChange={(value) =>
+                              setRuleDraft((prev) => ({
+                                ...prev,
+                                cooldownMs: Number(value ?? 0),
+                              }))
+                            }
+                          />
+                        </Col>
                         <Col xs={24} md={8}>
                           <Button
                             type='primary'
@@ -1710,13 +2321,13 @@ export default function OperatorMachineDetailPage() {
                             loading={savingRules}
                             onClick={() => void handleAddDynamicRule()}
                           >
-                            Thêm rule động
+                            Thêm quy tắc
                           </Button>
                         </Col>
                       </Row>
 
                       {dynamicFanRules.length === 0 ? (
-                        <Empty description='Chưa có rule động cho quạt' image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                        <Empty description='Chưa có quy tắc cho quạt' image={Empty.PRESENTED_IMAGE_SIMPLE} />
                       ) : (
                         <Space direction='vertical' size={8} style={{ width: '100%' }}>
                           {dynamicFanRules.map((rule) => (
@@ -1725,6 +2336,7 @@ export default function OperatorMachineDetailPage() {
                                 <Col xs={24} md={16}>
                                   <Space size={8} wrap>
                                     <Tag color={rule.enabled ? 'green' : 'default'}>{rule.id}</Tag>
+                                    <Tag color='red'>critical</Tag>
                                     <Text>{rule.sensorFeed}</Text>
                                     <Tag>{rule.comparator}</Tag>
                                     <Tag color='orange'>{rule.threshold}</Tag>
@@ -1732,6 +2344,8 @@ export default function OperatorMachineDetailPage() {
                                     <Text>{rule.fanFeed}</Text>
                                     <Tag color='blue'>ON {rule.fanLevelOn}%</Tag>
                                     <Tag>OFF {rule.fanLevelOff}%</Tag>
+                                    <Tag color='purple'>P{rule.priority}</Tag>
+                                    <Tag>CD {rule.cooldownMs}ms</Tag>
                                   </Space>
                                 </Col>
                                 <Col xs={24} md={8}>
@@ -1750,34 +2364,242 @@ export default function OperatorMachineDetailPage() {
                           ))}
                         </Space>
                       )}
+
+                      <Divider style={{ margin: '8px 0' }} />
+                      <Text strong>2) Nhóm quy tắc thông thường (AND/OR)</Text>
+                      <Row gutter={[8, 8]}>
+                        <Col xs={24} md={5}>
+                          <Select
+                            style={{ width: '100%' }}
+                            value={groupDraft.operator}
+                            options={[
+                              { value: 'AND', label: 'AND' },
+                              { value: 'OR', label: 'OR' },
+                            ]}
+                            onChange={(value) =>
+                              setGroupDraft((prev) => ({
+                                ...prev,
+                                operator: value as DynamicFanGroupOperator,
+                              }))
+                            }
+                          />
+                        </Col>
+                        <Col xs={24} md={9}>
+                          <Select
+                            style={{ width: '100%' }}
+                            placeholder='Cảm biến điều kiện'
+                            value={groupDraft.sensorFeed || undefined}
+                            options={sensorRuleOptions}
+                            onChange={(value) =>
+                              setGroupDraft((prev) => ({ ...prev, sensorFeed: value }))
+                            }
+                          />
+                        </Col>
+                        <Col xs={24} md={4}>
+                          <Select
+                            style={{ width: '100%' }}
+                            value={groupDraft.comparator}
+                            options={[
+                              { value: 'gte', label: '>=' },
+                              { value: 'lte', label: '<=' },
+                            ]}
+                            onChange={(value) =>
+                              setGroupDraft((prev) => ({
+                                ...prev,
+                                comparator: value as DynamicFanComparator,
+                              }))
+                            }
+                          />
+                        </Col>
+                        <Col xs={24} md={6}>
+                          <InputNumber
+                            style={{ width: '100%' }}
+                            value={groupDraft.threshold}
+                            onChange={(value) =>
+                              setGroupDraft((prev) => ({
+                                ...prev,
+                                threshold: Number(value ?? 0),
+                              }))
+                            }
+                            placeholder='Ngưỡng'
+                          />
+                        </Col>
+                      </Row>
+                      <Row gutter={[8, 8]}>
+                        <Col xs={24} md={8}>
+                          <Select
+                            style={{ width: '100%' }}
+                            placeholder='Chấp hành đầu ra'
+                            value={groupDraft.fanFeed || undefined}
+                            options={actuatorRuleOptions.length > 0 ? actuatorRuleOptions : fanRuleOptions}
+                            onChange={(value) =>
+                              setGroupDraft((prev) => ({ ...prev, fanFeed: value }))
+                            }
+                          />
+                        </Col>
+                        <Col xs={24} md={4}>
+                          <InputNumber
+                            min={0}
+                            max={100}
+                            style={{ width: '100%' }}
+                            value={groupDraft.fanLevelOn}
+                            addonBefore='ON %'
+                            onChange={(value) =>
+                              setGroupDraft((prev) => ({
+                                ...prev,
+                                fanLevelOn: Number(value ?? 0),
+                              }))
+                            }
+                          />
+                        </Col>
+                        <Col xs={24} md={4}>
+                          <InputNumber
+                            min={0}
+                            max={100}
+                            style={{ width: '100%' }}
+                            value={groupDraft.fanLevelOff}
+                            addonBefore='OFF %'
+                            onChange={(value) =>
+                              setGroupDraft((prev) => ({
+                                ...prev,
+                                fanLevelOff: Number(value ?? 0),
+                              }))
+                            }
+                          />
+                        </Col>
+                        <Col xs={24} md={4}>
+                          <InputNumber
+                            min={0}
+                            style={{ width: '100%' }}
+                            value={groupDraft.priority}
+                            addonBefore='Prio'
+                            onChange={(value) =>
+                              setGroupDraft((prev) => ({
+                                ...prev,
+                                priority: Number(value ?? 0),
+                              }))
+                            }
+                          />
+                        </Col>
+                        <Col xs={24} md={4}>
+                          <InputNumber
+                            min={0}
+                            style={{ width: '100%' }}
+                            value={groupDraft.cooldownMs}
+                            addonBefore='Thời gian chờ (ms)'
+                            onChange={(value) =>
+                              setGroupDraft((prev) => ({
+                                ...prev,
+                                cooldownMs: Number(value ?? 0),
+                              }))
+                            }
+                          />
+                        </Col>
+                      </Row>
+                      <Button
+                        type='dashed'
+                        loading={savingRules}
+                        onClick={() => void handleAddGroupRule()}
+                      >
+                        Thêm quy tắc nhóm
+                      </Button>
+
+                      {dynamicFanGroups.length === 0 ? (
+                        <Empty description='Chưa có rule group cho vận hành thường' image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                      ) : (
+                        <Space direction='vertical' size={8} style={{ width: '100%' }}>
+                          {dynamicFanGroups.map((group) => {
+                            const firstCondition = group.conditions[0];
+                            const firstOutput = group.outputs[0];
+                            return (
+                              <Card size='small' key={group.id}>
+                                <Row gutter={[8, 8]} align='middle'>
+                                  <Col xs={24} md={16}>
+                                    <Space size={8} wrap>
+                                      <Tag color={group.enabled ? 'green' : 'default'}>{group.id}</Tag>
+                                      <Tag color='blue'>{group.operator}</Tag>
+                                      <Tag color='gold'>normal</Tag>
+                                      {firstCondition ? (
+                                        <>
+                                          <Text>{firstCondition.sensorFeed}</Text>
+                                          <Tag>{firstCondition.comparator}</Tag>
+                                          <Tag color='orange'>{firstCondition.threshold}</Tag>
+                                        </>
+                                      ) : null}
+                                      <Text>{'->'}</Text>
+                                      {firstOutput ? (
+                                        <>
+                                          <Text>{firstOutput.fanFeed}</Text>
+                                          <Tag color='blue'>ON {firstOutput.fanLevelOn}%</Tag>
+                                          <Tag>OFF {firstOutput.fanLevelOff}%</Tag>
+                                        </>
+                                      ) : null}
+                                      <Tag color='purple'>P{group.priority}</Tag>
+                                      <Tag>CD {group.cooldownMs}ms</Tag>
+                                    </Space>
+                                  </Col>
+                                  <Col xs={24} md={8}>
+                                    <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
+                                      <Switch
+                                        checked={group.enabled}
+                                        onChange={(checked) => void handleToggleGroupRule(group.id, checked)}
+                                      />
+                                      <Button danger size='small' onClick={() => void handleDeleteGroupRule(group.id)}>
+                                        Xóa
+                                      </Button>
+                                    </Space>
+                                  </Col>
+                                </Row>
+                              </Card>
+                            );
+                          })}
+                        </Space>
+                      )}
+
+                      <Divider style={{ margin: '8px 0' }} />
+                      <Text strong>3) Conflict Resolution</Text>
+                      <Row gutter={[8, 8]} align='middle'>
+                        <Col xs={24} md={8}>
+                          <InputNumber
+                            min={0}
+                            style={{ width: '100%' }}
+                            value={conflictSettings.defaultCooldownMs}
+                            addonBefore='Thời gian mặc định'
+                            onChange={(value) =>
+                              setConflictSettings((prev) => ({
+                                ...prev,
+                                defaultCooldownMs: Number(value ?? 0),
+                              }))
+                            }
+                          />
+                        </Col>
+                        <Col xs={24} md={8}>
+                          <Space>
+                            <Switch
+                              checked={conflictSettings.allowEqualPriorityTakeover}
+                              onChange={(checked) =>
+                                setConflictSettings((prev) => ({
+                                  ...prev,
+                                  allowEqualPriorityTakeover: checked,
+                                }))
+                              }
+                            />
+                            <Text>Cho phép chuyển quyền điều khiển giữa các quy tắc cùng mức độ ưu tiên</Text>
+                          </Space>
+                        </Col>
+                        <Col xs={24} md={8}>
+                          <Button
+                            block
+                            loading={savingRules}
+                            onClick={() => void handleSaveConflictSettings()}
+                          >
+                            Lưu cài đặt điều phối xung đột
+                          </Button>
+                        </Col>
+                      </Row>
                     </Space>
                   </Card>
 
-                  {fanNodes.length === 0 ? (
-                    <Empty description='Chưa phát hiện node quạt trong cấu hình hiện tại' />
-                  ) : (
-                    <Row gutter={[12, 12]}>
-                      {fanNodes.map((fan, index) => (
-                        <Col xs={24} md={12} xl={8} key={fan.key}>
-                          <Card size='small'>
-                            <Space direction='vertical' size={2} style={{ width: '100%' }}>
-                              <Text strong>{fan.name}</Text>
-                              <Text type='secondary'>{fan.feed}</Text>
-                              <Text>
-                                {Number.isFinite(Number(fan.level)) ? Number(fan.level).toFixed(1) : '--'}%
-                              </Text>
-                              <Text type='secondary' style={{ fontSize: 12 }}>
-                                {fan.updatedAt
-                                  ? dayjs(fan.updatedAt).format('HH:mm:ss DD/MM')
-                                  : 'Theo trạng thái output'}
-                              </Text>
-                              {index === 0 ? <Tag color='blue'>Quạt điều khiển chính</Tag> : <Tag>Theo dõi</Tag>}
-                            </Space>
-                          </Card>
-                        </Col>
-                      ))}
-                    </Row>
-                  )}
                 </Space>
               ) : null}
             </Space>
@@ -2098,104 +2920,6 @@ export default function OperatorMachineDetailPage() {
                   {savingSetpoint && <Text type="secondary">Đang lưu setpoint...</Text>}
                 </Space>
               </Card>
-
-              <Text strong style={{ display: 'block', marginBottom: 8, fontSize: 14 }}>
-                Điều khiển thiết bị
-              </Text>
-              <Row gutter={[10, 10]}>
-                <Col span={12}>
-                  <Card size="small" style={{ borderRadius: 10 }} styles={{ body: { padding: 12 } }}>
-                    <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                      <Text strong>
-                        LED
-                      </Text>
-                      <Switch
-                        checked={hasLedFeed ? output.ledOn : false}
-                        disabled={!isManualMode || !hasLedFeed}
-                        onChange={(checked) => void handleLedToggle(checked)}
-                      />
-                      {!hasLedFeed && <Text type="secondary" style={{ fontSize: 11 }}>Chưa cấu hình LED feed</Text>}
-                    </Space>
-                  </Card>
-                </Col>
-                <Col span={12}>
-                  <Card size="small" style={{ borderRadius: 10 }} styles={{ body: { padding: 12 } }}>
-                    <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                      <Text strong>
-                        Quạt
-                      </Text>
-                      <Tag color={output.fanOn ? 'success' : 'default'}>
-                        {!hasFanFeed ? 'Chưa cấu hình' : output.fanOn ? 'Đang chạy' : 'Đang tắt'}
-                      </Tag>
-                    </Space>
-                  </Card>
-                </Col>
-                <Col span={24}>
-                  <Card size="small" style={{ borderRadius: 10 }} styles={{ body: { padding: 12 } }}>
-                    <Text strong style={{ display: 'block', marginBottom: 8 }}>Tốc độ quạt</Text>
-                    <Slider
-                      min={0}
-                      max={100}
-                      step={1}
-                      value={fanLevelDraft}
-                      disabled={!isManualMode || !hasFanFeed}
-                      onChange={(value) => {
-                        if (!isManualMode || !hasFanFeed) return;
-                        if (typeof value !== 'number') return;
-                        setIsAdjustingFan(true);
-                        setFanLevelDraft(value);
-                      }}
-                      onChangeComplete={(value) => {
-                        if (!isManualMode || !hasFanFeed) return;
-                        if (typeof value !== 'number') return;
-                        void setFanLevel(value).finally(() => {
-                          setIsAdjustingFan(false);
-                        });
-                      }}
-                    />
-                    <Text type="secondary">
-                      {hasFanFeed ? `Mức hiện tại: ${fanLevelDraft}%` : 'Chưa cấu hình feed quạt'}
-                    </Text>
-                  </Card>
-                </Col>
-              </Row>
-            </div>
-
-            <div style={{ marginBottom: 10 }}>
-              <Text strong style={{ display: 'block', marginBottom: 8 }}>LCD Message</Text>
-              <div style={{ padding: '14px 16px', background: '#0a1628', borderRadius: 10, border: '1px solid #1a2a3a', marginBottom: 8 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-                  <Text strong style={{ fontSize: 13, color: '#fff' }}>LCD I2C</Text>
-                  <Tag color="geekblue" style={{ borderRadius: 10, fontSize: 10, marginLeft: 'auto' }}>OUTPUT</Tag>
-                </div>
-                <LcdDisplay message={output.lcdMessage} />
-              </div>
-              {isManualMode && hasLcdFeed ? (
-                <>
-                  <TextArea
-                    rows={3}
-                    placeholder="Nhập tối đa 32 ký tự..."
-                    value={lcdInput}
-                    onChange={(e) => setLcdInput(e.target.value)}
-                    maxLength={64}
-                    style={{ borderRadius: 8, marginBottom: 8 }}
-                  />
-                  <Button
-                    block
-                    type="primary"
-                    icon={<SendOutlined />}
-                    onClick={() => void handleSendLcd()}
-                    loading={sendingLcd}
-                    style={{ borderRadius: 10, height: 42, fontWeight: 600 }}
-                  >
-                    Gửi LCD
-                  </Button>
-                </>
-              ) : (
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  {hasLcdFeed ? 'Chỉ chỉnh LCD ở chế độ Manual.' : 'Chưa cấu hình feed LCD.'}
-                </Text>
-              )}
             </div>
 
             {isMaintenance && (

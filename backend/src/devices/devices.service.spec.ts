@@ -10,6 +10,21 @@ describe('DevicesService sensorFeeds response', () => {
         update: jest.fn(),
         delete: jest.fn(),
       },
+      zone: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      sensorChannel: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findUnique: jest.fn().mockResolvedValue(null),
+        deleteMany: jest.fn(),
+        upsert: jest.fn(),
+      },
+      actuatorChannel: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findUnique: jest.fn().mockResolvedValue(null),
+        deleteMany: jest.fn(),
+        upsert: jest.fn(),
+      },
       $executeRawUnsafe: jest.fn(),
     };
 
@@ -59,12 +74,17 @@ describe('DevicesService sensorFeeds response', () => {
       mqttTopicSensor: 'm-b2/temperature',
       metaData: { feedKey: 'm-b2/temperature' },
       zone: null,
+      sensorChannels: [],
+      actuatorChannels: [],
     });
 
-    prisma.device.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([
+    // First call: from findOne -> attachZonesByZoneId (zone.findMany)
+    // refreshMqttSubscriptionsFromDevices calls device.findMany with sensorChannels
+    prisma.device.findMany.mockResolvedValue([
       {
         mqttTopicSensor: 'm-b2/temperature',
         metaData: { feedKey: 'm-b2/temperature' },
+        sensorChannels: [],
       },
     ]);
 
