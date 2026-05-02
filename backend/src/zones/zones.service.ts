@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  InternalServerErrorException,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateZoneDto } from './dto/create-zone.dto';
 
@@ -24,8 +29,20 @@ export class ZonesService {
     return zone;
   }
 
-  create(dto: CreateZoneDto) {
-    return this.prisma.zone.create({ data: dto });
+  async create(dto: CreateZoneDto) {
+    try {
+      return await this.prisma.zone.create({ data: dto });
+    } catch (error: any) {
+      if (error.code === 'P2002') {
+        const field = error.meta?.target?.[0] || 'unknown field';
+        throw new ConflictException(
+          `A zone with this ${field} already exists.`,
+        );
+      }
+      throw new InternalServerErrorException(
+        'Failed to create zone: ' + error.message,
+      );
+    }
   }
 
   async update(id: number, dto: Partial<CreateZoneDto>) {
@@ -34,7 +51,12 @@ export class ZonesService {
   }
 
   async remove(id: number) {
-    await this.findOne(id);
+    const zone = await this.findOne(id);
+    if (zone.devices && zone.devices.length > 0) {
+      throw new ConflictException(
+        'Không thể xóa khu vực đang chứa buồng sấy. Vui lòng chuyển hoặc xóa các buồng sấy trước.',
+      );
+    }
     return this.prisma.zone.delete({ where: { zoneID: id } });
   }
 }

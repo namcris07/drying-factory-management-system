@@ -7,6 +7,7 @@ import {
   IsOptional,
   IsString,
   MinLength,
+  IsIn,
 } from 'class-validator';
 
 export class UpdateUserDto {
@@ -29,10 +30,12 @@ export class UpdateUserDto {
 
   @IsOptional()
   @IsString()
+  @IsIn(['Admin', 'Manager', 'Operator'])
   role?: string;
 
   @IsOptional()
   @IsString()
+  @IsIn(['Active', 'Inactive'])
   status?: string;
 
   @IsOptional()
@@ -41,4 +44,19 @@ export class UpdateUserDto {
   @Type(() => Number)
   @IsInt({ each: true })
   chamberIDs?: number[];
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  organizationID?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  factoryID?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  siteID?: number;
 }

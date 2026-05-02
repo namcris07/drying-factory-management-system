@@ -69,8 +69,8 @@ describe('mqtt-logic.util', () => {
         nowMs: 4200,
         temperature: 45,
         humidity: 50,
-        light: 250,
-        lightSensorThreshold: 500,
+        light: 50,
+        lightSensorThreshold: 90,
         operatorMessage: 'manual message',
       });
 
@@ -87,7 +87,7 @@ describe('mqtt-logic.util', () => {
         temperature: 45,
         humidity: 50,
         light: 250,
-        lightSensorThreshold: 500,
+        lightSensorThreshold: 90,
         operatorMessage: 'Batch A almost done',
       });
 

@@ -6,7 +6,7 @@
  */
 import { createContext, useContext, useState, useEffect, ReactNode, useRef } from 'react';
 import { useMemo } from 'react';
-import { Machine, Recipe } from '@/features/operator/model/machine-data';
+import { Machine, Recipe, SensorState, ActuatorState } from '@/features/operator/model/machine-data';
 import { batchesApi, chambersApi, mqttApi, recipesApi } from '@/shared/lib/api';
 
 export type OperatorContextType = {
@@ -152,11 +152,43 @@ export function OperatorProvider({
               ),
             );
 
+            const sensorState = (row.sensors ?? []).map((sensor) => {
+              const fallbackSensorName =
+                sensor.sensorName?.trim() ||
+                sensor.sensorType?.trim() ||
+                normalizeFeed(sensor.feedKey) ||
+                sensor.feedKey;
+
+              return {
+                feed: normalizeFeed(sensor.feedKey) ?? sensor.feedKey,
+                sensorName: fallbackSensorName,
+                sensorType: sensor.sensorType?.trim() || 'Custom',
+                value: null,
+                updatedAt: null,
+              };
+            });
+
+            const actuatorState = (row.actuatorChannels ?? []).map((actuator) => {
+              const fallbackActuatorName =
+                actuator.actuatorName?.trim() ||
+                actuator.actuatorType?.trim() ||
+                normalizeFeed(actuator.feedKey) ||
+                actuator.feedKey;
+
+              return {
+                feed: normalizeFeed(actuator.feedKey) ?? actuator.feedKey,
+                actuatorName: fallbackActuatorName,
+                actuatorType: actuator.actuatorType?.trim() || 'Custom',
+                value: null,
+                updatedAt: null,
+              };
+            });
+
             return {
               id: toMachineId(row.chamberName, row.chamberID),
               deviceID: row.chamberID,
               name: row.chamberName || `Buồng sấy ${row.chamberID}`,
-              zone: row.zoneName || zone,
+              zone: row.zoneName || 'Chưa phân khu',
               zoneID: row.zoneID ?? undefined,
               deviceType: 'DryingChamber',
               deviceStatusRaw: row.chamberStatus ?? undefined,
@@ -164,7 +196,8 @@ export function OperatorProvider({
               temp: 0,
               humidity: 0,
               sensorFeeds,
-              sensorState: [],
+              sensorState,
+              actuatorState,
             } as Machine;
           });
 
@@ -302,29 +335,68 @@ export function OperatorProvider({
 
             const feeds = deviceState?.feeds ?? [];
 
-            const tempFeed = feeds.find(
-              (feed) => feed.sensorType === 'temperature',
+            // Tính temp/humidity tổng hợp bất kể nhiều sensor
+            const tempFeeds = feeds.filter(
+              (f) => f.sensorType === 'temperature' || String(f.sensorType).toLowerCase().includes('temp'),
             );
-            const humidityFeed = feeds.find(
-              (feed) => feed.sensorType === 'humidity',
+            const humidityFeeds = feeds.filter(
+              (f) => f.sensorType === 'humidity' || String(f.sensorType).toLowerCase().includes('humid'),
             );
 
-            const temp = parseNumber(tempFeed?.value);
-            const humidity = parseNumber(humidityFeed?.value);
+            const avgOrFirst = (arr: typeof feeds) => {
+              const nums = arr
+                .map((f) => parseNumber(f.value))
+                .filter((n): n is number => n !== undefined);
+              if (nums.length === 0) return undefined;
+              return Math.round((nums.reduce((a, b) => a + b, 0) / nums.length) * 10) / 10;
+            };
+
+            const temp = avgOrFirst(tempFeeds);
+            const humidity = avgOrFirst(humidityFeeds);
+
+            // Phân loại feeds thành sensor và actuator
+            // Actuator: loại thiết bị chấp hành (Fan, Led, Lcd, Pump, Heater, ...)
+            // Sensor: nguồn dữ liệu đọc (TemperatureSensor, HumiditySensor, LightSensor, Custom...)
+            const ACTUATOR_TYPES = new Set([
+              'fan', 'led', 'lcd', 'pump', 'heater', 'humidifier', 'doorlock',
+              'Fan', 'Led', 'Lcd', 'Pump', 'Heater', 'Humidifier', 'DoorLock',
+            ]);
+            const isActuatorType = (type: string) =>
+              ACTUATOR_TYPES.has(type) ||
+              String(type).toLowerCase().includes('fan') ||
+              String(type).toLowerCase().includes('led') ||
+              String(type).toLowerCase().includes('lcd') ||
+              String(type).toLowerCase().includes('pump') ||
+              String(type).toLowerCase().includes('heater');
+
+            const sensorFeeds = feeds.filter((f) => !isActuatorType(f.sensorType));
+            const actuatorFeeds = feeds.filter((f) => isActuatorType(f.sensorType));
+
+            const sensorState: SensorState[] = sensorFeeds.map((f) => ({
+              feed: f.feed,
+              sensorName: f.sensorType,
+              sensorType: f.sensorType,
+              value: f.value,
+              updatedAt: f.updatedAt,
+            }));
+
+            const actuatorState: ActuatorState[] = actuatorFeeds.map((f) => ({
+              feed: f.feed,
+              actuatorName: f.sensorType,
+              actuatorType: f.sensorType,
+              value: f.value,
+              updatedAt: f.updatedAt,
+            }));
 
             const baseMachine = {
               ...machine,
               temp: temp ?? machine.temp,
               humidity: humidity ?? machine.humidity,
-              sensorState: feeds.map((feed) => ({
-                feed: feed.feed,
-                sensorType: feed.sensorType,
-                value: feed.value,
-                updatedAt: feed.updatedAt,
-              })),
+              sensorState,
+              actuatorState,
               sensorFeeds:
-                feeds.length > 0
-                  ? feeds.map((feed) => feed.feed)
+                sensorFeeds.length > 0
+                  ? sensorFeeds.map((f) => f.feed)
                   : machine.sensorFeeds,
             };
 

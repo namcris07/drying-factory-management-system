@@ -64,6 +64,18 @@ export class CreateRecipeDto {
   userID?: number;
 
   @IsOptional()
+  @IsInt()
+  organizationID?: number;
+
+  @IsOptional()
+  @IsInt()
+  factoryID?: number;
+
+  @IsOptional()
+  @IsInt()
+  siteID?: number;
+
+  @IsOptional()
   @IsBoolean()
   isActive?: boolean;
 

@@ -24,10 +24,8 @@ export function filterMachinesByZone(machines: Machine[], zone: string): Machine
     return exactMatches;
   }
 
-  const fuzzyMatches = machines.filter((machine) =>
+  return machines.filter((machine) =>
     normalizeZoneName(machine.zone).includes(zoneKey) ||
     zoneKey.includes(normalizeZoneName(machine.zone)),
   );
-
-  return fuzzyMatches.length > 0 ? fuzzyMatches : machines;
 }

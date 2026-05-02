@@ -4,7 +4,7 @@
  * app/(admin)/admin/thresholds/page.tsx
  * Thiết lập Ngưỡng Hệ thống — kết nối backend thật
  */
-import { Typography, Card, Form, InputNumber, Button, Row, Col, Alert, Space, Switch, Spin, App } from 'antd';
+import { Typography, Card, Form, InputNumber, Button, Row, Col, Space, Switch, Spin, App } from 'antd';
 import { SettingOutlined, SaveOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useState, useEffect } from 'react';
 import { systemConfigApi } from '@/shared/lib/api';
@@ -70,16 +70,8 @@ export default function SystemThresholdsPage() {
         </Space>
       </div>
 
-      <Alert
-        message="Lưu ý quan trọng"
-        description="Thay đổi các ngưỡng này sẽ ảnh hưởng đến toàn bộ hệ thống cảnh báo. Vui lòng kiểm tra kỹ trước khi lưu."
-        type="warning"
-        showIcon
-        style={{ marginBottom: 24 }}
-      />
-
       <Row gutter={24}>
-        <Col xs={24} md={12}>
+        <Col xs={24}>
           <Card title="🌡️ Ngưỡng Nhiệt độ & Độ ẩm" style={{ borderRadius: 12, marginBottom: 24 }}>
             <Form layout="vertical">
               <Form.Item label="Nhiệt độ an toàn tối đa (°C)">
@@ -93,22 +85,6 @@ export default function SystemThresholdsPage() {
               </Form.Item>
               <Form.Item label="Ngưỡng cảm biến ánh sáng">
                 <InputNumber value={thresholds.lightSensorThreshold} onChange={(v) => setThresholds({ ...thresholds, lightSensorThreshold: v || 0 })} style={{ width: '100%' }} min={0} max={1024} />
-              </Form.Item>
-            </Form>
-          </Card>
-        </Col>
-
-        <Col xs={24} md={12}>
-          <Card title="⚙️ Cấu hình MQTT" style={{ borderRadius: 12, marginBottom: 24 }}>
-            <Form layout="vertical">
-              <Form.Item label="MQTT Broker Host">
-                <Text code>{thresholds.mqttBrokerHost}</Text>
-              </Form.Item>
-              <Form.Item label="MQTT Broker Port">
-                <InputNumber value={thresholds.mqttBrokerPort} onChange={(v) => setThresholds({ ...thresholds, mqttBrokerPort: v || 1883 })} style={{ width: '100%' }} min={1} max={65535} />
-              </Form.Item>
-              <Form.Item label="MQTT Keep Alive (giây)">
-                <InputNumber value={thresholds.mqttKeepAlive} onChange={(v) => setThresholds({ ...thresholds, mqttKeepAlive: v || 60 })} style={{ width: '100%' }} min={10} max={300} />
               </Form.Item>
             </Form>
           </Card>
@@ -130,14 +106,8 @@ export default function SystemThresholdsPage() {
         </Col>
 
         <Col xs={24} md={12}>
-          <Card title="📊 Lưu trữ dữ liệu" style={{ borderRadius: 12, marginBottom: 24 }}>
+          <Card title="⚙️ Cài đặt vận hành" style={{ borderRadius: 12, marginBottom: 24 }}>
             <Form layout="vertical">
-              <Form.Item label="Thời gian lưu trữ dữ liệu (ngày)">
-                <InputNumber value={thresholds.dataRetentionDays} onChange={(v) => setThresholds({ ...thresholds, dataRetentionDays: v || 365 })} style={{ width: '100%' }} min={30} max={3650} />
-              </Form.Item>
-              <Form.Item label="Tự động lưu trữ batch sau (ngày)">
-                <InputNumber value={thresholds.batchAutoArchiveDays} onChange={(v) => setThresholds({ ...thresholds, batchAutoArchiveDays: v || 90 })} style={{ width: '100%' }} min={7} max={365} />
-              </Form.Item>
               <Form.Item label="Tự động dừng khi vượt ngưỡng">
                 <Switch
                   checked={thresholds.autoStopEnabled}

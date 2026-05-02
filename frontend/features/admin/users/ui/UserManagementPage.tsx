@@ -119,8 +119,10 @@ export default function UserManagementPage() {
       }
       setModalOpen(false);
       await loadUsers();
-    } catch {
-      // validation or API error — message already shown or form shows inline
+    } catch (error) {
+      if (error instanceof Error) {
+        message.error(error.message);
+      }
     } finally {
       setSaving(false);
     }
@@ -142,8 +144,8 @@ export default function UserManagementPage() {
           await usersApi.remove(user.userID);
           message.success('Đã xóa tài khoản.');
           await loadUsers();
-        } catch {
-          message.error('Xóa tài khoản thất bại.');
+        } catch (error) {
+          message.error(error instanceof Error ? error.message : 'Xóa tài khoản thất bại.');
         }
       },
     });
@@ -155,8 +157,8 @@ export default function UserManagementPage() {
       await usersApi.update(user.userID, { status: next });
       message.info(`Tài khoản "${displayName(user)}" → ${next}.`);
       await loadUsers();
-    } catch {
-      message.error('Cập nhật trạng thái thất bại.');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Cập nhật trạng thái thất bại.');
     }
   };
 

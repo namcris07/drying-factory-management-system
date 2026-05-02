@@ -28,7 +28,7 @@ export const DEFAULT_SYSTEM_THRESHOLDS: SystemThresholds = {
   mqttKeepAlive: 60,
   dataRetentionDays: 365,
   batchAutoArchiveDays: 90,
-  lightSensorThreshold: 500,
+  lightSensorThreshold: 90,
   doorOpenTimeout: 5,
 };
 
