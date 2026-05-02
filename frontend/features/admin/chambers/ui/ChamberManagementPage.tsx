@@ -44,6 +44,12 @@ type ChamberFormValues = {
   zoneID: number;
   chamberStatus?: string;
   sensors?: SensorFormValue[];
+  actuatorChannels?: {
+    actuatorName?: string;
+    actuatorType: string;
+    feedKey: string;
+    status?: string;
+  }[];
 };
 
 const SENSOR_TYPE_OPTIONS = [
@@ -51,6 +57,15 @@ const SENSOR_TYPE_OPTIONS = [
   { value: 'HumiditySensor', label: 'HumiditySensor' },
   { value: 'LightSensor', label: 'LightSensor' },
   { value: 'Fan', label: 'Fan' },
+  { value: 'Lcd', label: 'Lcd' },
+  { value: 'Custom', label: 'Custom' },
+];
+
+const ACTUATOR_TYPE_OPTIONS = [
+  { value: 'Fan', label: 'Fan' },
+  { value: 'Heater', label: 'Heater' },
+  { value: 'Pump', label: 'Pump' },
+  { value: 'Led', label: 'Led' },
   { value: 'Lcd', label: 'Lcd' },
   { value: 'Custom', label: 'Custom' },
 ];
@@ -176,6 +191,7 @@ export default function ChamberManagementPage() {
       zoneID: zones[0]?.zoneID,
       chamberStatus: 'Active',
       sensors: [],
+      actuatorChannels: [],
     });
     setModalOpen(true);
   };
@@ -192,6 +208,12 @@ export default function ChamberManagementPage() {
         sensorType: sensor.sensorType,
         feedKey: sensor.feedKey,
         status: sensor.status,
+      })),
+      actuatorChannels: (row.actuatorChannels ?? []).map((actuator) => ({
+        actuatorName: actuator.actuatorName,
+        actuatorType: actuator.actuatorType,
+        feedKey: actuator.feedKey,
+        status: actuator.status,
       })),
     });
     setModalOpen(true);
@@ -211,6 +233,15 @@ export default function ChamberManagementPage() {
         }))
         .filter((sensor) => sensor.feedKey);
 
+      const actuatorChannels = (values.actuatorChannels ?? [])
+        .map((actuator) => ({
+          actuatorName: String(actuator.actuatorName ?? '').trim() || undefined,
+          actuatorType: String(actuator.actuatorType ?? '').trim(),
+          feedKey: normalizeFeedKey(actuator.feedKey),
+          status: String(actuator.status ?? 'Active').trim() || 'Active',
+        }))
+        .filter((actuator) => actuator.feedKey);
+
       const payload = {
         chamberName: String(values.chamberName ?? '').trim(),
         chamberDescription:
@@ -218,6 +249,7 @@ export default function ChamberManagementPage() {
         zoneID: Number(values.zoneID),
         chamberStatus: String(values.chamberStatus ?? 'Active'),
         sensors,
+        actuatorChannels,
       };
 
       if (editing) {
@@ -276,9 +308,17 @@ export default function ChamberManagementPage() {
     {
       title: 'Số cảm biến',
       key: 'sensorCount',
-      width: 130,
+      width: 110,
       render: (_: unknown, row: ApiChamber) => (
         <Tag color="blue">{row.sensors?.length ?? 0}</Tag>
+      ),
+    },
+    {
+      title: 'Số actuator',
+      key: 'actuatorCount',
+      width: 110,
+      render: (_: unknown, row: ApiChamber) => (
+        <Tag color="purple">{row.actuatorChannels?.length ?? 0}</Tag>
       ),
     },
     {
@@ -407,7 +447,7 @@ export default function ChamberManagementPage() {
           rowKey="chamberID"
           dataSource={filteredChambers}
           columns={columns}
-          pagination={false}
+          pagination={{ defaultPageSize: 10, showSizeChanger: true, pageSizeOptions: ['10', '20', '50'] }}
           locale={{ emptyText: <Empty description="Chưa có buồng sấy" /> }}
         />
       </Card>
@@ -520,6 +560,66 @@ export default function ChamberManagementPage() {
                 ))}
                 <Button type="dashed" onClick={() => add({ sensorType: 'TemperatureSensor', status: 'Active' })}>
                   + Thêm cảm biến
+                </Button>
+              </>
+            )}
+          </Form.List>
+
+
+          <div style={{ marginBottom: 8, fontWeight: 600 }}>Thiết bị chấp hành (Actuator)</div>
+
+          <Form.List name="actuatorChannels">
+            {(fields, { add, remove }) => (
+              <>
+                {fields.map((field) => (
+                  <Row gutter={8} key={field.key} align="top" style={{ marginBottom: 8 }}>
+                    <Col xs={24} md={6}>
+                      <Form.Item
+                        {...field}
+                        label="Tên actuator"
+                        name={[field.name, 'actuatorName']}
+                      >
+                        <Input placeholder="Quạt hút 1" />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} md={5}>
+                      <Form.Item
+                        {...field}
+                        label="Loại"
+                        name={[field.name, 'actuatorType']}
+                        rules={[{ required: true, message: 'Chọn loại.' }]}
+                      >
+                        <Select options={ACTUATOR_TYPE_OPTIONS} />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} md={8}>
+                      <Form.Item
+                        {...field}
+                        label="Feed key"
+                        name={[field.name, 'feedKey']}
+                        rules={[{ required: true, message: 'Nhập feed key.' }]}
+                      >
+                        <Input placeholder="drytech.m-a1-fan-1" />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} md={3}>
+                      <Form.Item
+                        {...field}
+                        label="Status"
+                        name={[field.name, 'status']}
+                      >
+                        <Select options={STATUS_OPTIONS} />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} md={2}>
+                      <Button danger style={{ marginTop: 30 }} onClick={() => remove(field.name)}>
+                        Xóa
+                      </Button>
+                    </Col>
+                  </Row>
+                ))}
+                <Button type="dashed" onClick={() => add({ actuatorType: 'Fan', status: 'Active' })}>
+                  + Thêm Actuator
                 </Button>
               </>
             )}

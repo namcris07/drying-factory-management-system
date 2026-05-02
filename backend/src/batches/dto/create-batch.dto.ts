@@ -20,6 +20,18 @@ export class CreateBatchDto {
   @IsInt()
   chamberID?: number;
 
+  @IsOptional()
+  @IsInt()
+  organizationID?: number;
+
+  @IsOptional()
+  @IsInt()
+  factoryID?: number;
+
+  @IsOptional()
+  @IsInt()
+  siteID?: number;
+
   @IsDateString()
   startTime: string;
 }
@@ -40,4 +52,16 @@ export class UpdateBatchDto {
   @IsOptional()
   @IsInt()
   currentStage?: number;
+
+  @IsOptional()
+  @IsInt()
+  organizationID?: number;
+
+  @IsOptional()
+  @IsInt()
+  factoryID?: number;
+
+  @IsOptional()
+  @IsInt()
+  siteID?: number;
 }

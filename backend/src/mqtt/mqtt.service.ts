@@ -16,6 +16,16 @@ import {
   resolveFormulaThreshold,
   type FormulaThresholdConfig,
 } from './mqtt-logic.util';
+import {
+  AtomRuleSpecification,
+  GroupRuleSpecification,
+  SensorObservationAdapter,
+  SensorStrategyFactory,
+  resolveSensorMetric,
+  type DynamicFanRuleLike,
+  type DynamicFanGroupRuleLike,
+  normalizeFeedKey as normalizePatternFeedKey,
+} from './mqtt-patterns';
 
 type FeedState = {
   feed: string;
@@ -49,7 +59,8 @@ type ThresholdConfig = {
   doorOpenTimeout: number;
 };
 
-type DynamicFanComparator = 'gte' | 'lte';
+type DynamicControlComparator = 'gte' | 'lte';
+type DynamicFanComparator = DynamicControlComparator;
 
 type DynamicFanRuleConfig = {
   id: string;
@@ -60,7 +71,53 @@ type DynamicFanRuleConfig = {
   fanFeed: string;
   fanLevelOn: number;
   fanLevelOff: number;
+  priority: number;
+  cooldownMs: number;
+  category: 'critical' | 'normal';
   configKey: string;
+};
+
+type DynamicControlGroupOperator = 'AND' | 'OR';
+type DynamicFanGroupOperator = DynamicControlGroupOperator;
+
+type DynamicControlGroupCondition = {
+  sensorFeed: string;
+  comparator: DynamicControlComparator;
+  threshold: number;
+};
+
+type DynamicFanGroupCondition = DynamicControlGroupCondition;
+
+type DynamicFanGroupOutput = {
+  fanFeed: string;
+  fanLevelOn: number;
+  fanLevelOff: number;
+};
+
+type DynamicFanGroupRuleConfig = {
+  id: string;
+  enabled: boolean;
+  operator: DynamicFanGroupOperator;
+  conditions: DynamicFanGroupCondition[];
+  outputs: DynamicFanGroupOutput[];
+  priority: number;
+  cooldownMs: number;
+  configKey: string;
+};
+
+type DynamicControlConflictConfig = {
+  defaultCooldownMs: number;
+  allowEqualPriorityTakeover: boolean;
+};
+
+type DynamicFanConflictConfig = DynamicControlConflictConfig;
+
+type ResolvedFanAction = {
+  ruleId: string;
+  fanFeed: string;
+  targetLevel: number;
+  priority: number;
+  cooldownMs: number;
 };
 
 const DEFAULT_THRESHOLDS: ThresholdConfig = {
@@ -72,7 +129,7 @@ const DEFAULT_THRESHOLDS: ThresholdConfig = {
   autoFanLevelOn: 50,
   autoStopEnabled: true,
   alertDelaySeconds: 15,
-  lightSensorThreshold: 500,
+  lightSensorThreshold: 90,
   doorOpenTimeout: 5,
 };
 
@@ -100,6 +157,10 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
   private readonly lcdFeedKey: string;
   private readonly fanLevelFeedKey: string;
   private readonly ledFeedKey: string;
+  private readonly sensorObservationAdapter = new SensorObservationAdapter();
+  private readonly sensorStrategyFactory = new SensorStrategyFactory();
+  private readonly atomRuleSpecification = new AtomRuleSpecification();
+  private readonly groupRuleSpecification = new GroupRuleSpecification();
   private lcdAutoPushTimer: NodeJS.Timeout | null = null;
   private lastOperatorLcdMessage = '';
   private publishingAutoLcd = false;
@@ -110,6 +171,17 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
   private allowedPublishFeedsRefreshedAt = 0;
   private dynamicFanRulesCachedAt = 0;
   private dynamicFanRulesCache: DynamicFanRuleConfig[] = [];
+  private dynamicFanGroupsCachedAt = 0;
+  private dynamicFanGroupsCache: DynamicFanGroupRuleConfig[] = [];
+  private dynamicFanConflictCachedAt = 0;
+  private dynamicFanConflictCache: DynamicFanConflictConfig = {
+    defaultCooldownMs: 5000,
+    allowEqualPriorityTakeover: false,
+  };
+  private fanRuleResolutionState = new Map<
+    string,
+    { ruleId: string; priority: number; value: number; appliedAt: number }
+  >();
 
   constructor(
     private readonly configService: ConfigService,
@@ -394,23 +466,38 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     deviceId: number;
     feeds: DeviceFeedState[];
   }> {
+    // Load device với đầy đủ SensorChannels và ActuatorChannels
     const device = await this.prisma.device.findUnique({
       where: { deviceID: deviceId },
       select: {
         deviceID: true,
         mqttTopicSensor: true,
         metaData: true,
+        sensorChannels: {
+          orderBy: { sortOrder: 'asc' },
+          select: {
+            feedKey: true,
+            sensorName: true,
+            sensorType: true,
+            unit: true,
+            status: true,
+          },
+        },
+        actuatorChannels: {
+          orderBy: { sortOrder: 'asc' },
+          select: {
+            feedKey: true,
+            actuatorName: true,
+            actuatorType: true,
+            status: true,
+          },
+        },
       },
     });
 
     if (!device) {
       throw new NotFoundException(`Device ${deviceId} not found`);
     }
-
-    const configuredFeeds = this.extractDeviceFeeds(
-      device.mqttTopicSensor,
-      device.metaData,
-    );
 
     const currentFeedState = new Map(
       this.getFeedState().map((item) => [
@@ -419,17 +506,76 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       ]),
     );
 
-    const feeds = configuredFeeds.map((feed) => {
-      const state = currentFeedState.get(this.normalizeFeedKey(feed));
-      return {
-        feed,
-        sensorType: this.detectSensorType(feed),
-        topic: state?.topic ?? null,
-        value: state?.value,
-        source: state?.source ?? null,
-        updatedAt: state?.updatedAt ?? null,
-      };
-    });
+    // Ưu tiên SensorChannels để xác định sensorType
+    const sensorChannels: Array<{
+      feedKey: string;
+      sensorType: string | null;
+    }> = Array.isArray(device.sensorChannels)
+      ? (device.sensorChannels as Array<{
+          feedKey: string;
+          sensorType: string | null;
+        }>)
+      : [];
+    const actuatorChannels: Array<{
+      feedKey: string;
+      actuatorType: string | null;
+    }> = Array.isArray(device.actuatorChannels)
+      ? (device.actuatorChannels as Array<{
+          feedKey: string;
+          actuatorType: string | null;
+        }>)
+      : [];
+    const hasSensorChannels = sensorChannels.length > 0;
+    const hasActuatorChannels = actuatorChannels.length > 0;
+
+    const feeds: DeviceFeedState[] = [];
+
+    if (hasSensorChannels) {
+      for (const ch of sensorChannels) {
+        const state = currentFeedState.get(this.normalizeFeedKey(ch.feedKey));
+        feeds.push({
+          feed: ch.feedKey,
+          // Dùng sensorType từ channel metadata thay vì detect từ tên feed
+          sensorType: ch.sensorType ?? this.detectSensorType(ch.feedKey),
+          topic: state?.topic ?? null,
+          value: state?.value,
+          source: state?.source ?? null,
+          updatedAt: state?.updatedAt ?? null,
+        });
+      }
+    } else {
+      // Backward compat: dùng mqttTopicSensor
+      const configuredFeeds = this.extractDeviceFeeds(
+        device.mqttTopicSensor,
+        device.metaData,
+      );
+      for (const feed of configuredFeeds) {
+        const state = currentFeedState.get(this.normalizeFeedKey(feed));
+        feeds.push({
+          feed,
+          sensorType: this.detectSensorType(feed),
+          topic: state?.topic ?? null,
+          value: state?.value,
+          source: state?.source ?? null,
+          updatedAt: state?.updatedAt ?? null,
+        });
+      }
+    }
+
+    // Thêm actuator channels với sensorType = actuatorType
+    if (hasActuatorChannels) {
+      for (const ch of actuatorChannels) {
+        const state = currentFeedState.get(this.normalizeFeedKey(ch.feedKey));
+        feeds.push({
+          feed: ch.feedKey,
+          sensorType: ch.actuatorType ?? this.detectSensorType(ch.feedKey),
+          topic: state?.topic ?? null,
+          value: state?.value,
+          source: state?.source ?? null,
+          updatedAt: state?.updatedAt ?? null,
+        });
+      }
+    }
 
     return {
       deviceId,
@@ -469,18 +615,33 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       select: {
         mqttTopicSensor: true,
         metaData: true,
+        // Include SensorChannels để subscribe đúng feed
+        sensorChannels: { select: { feedKey: true } },
       },
     });
 
     const feeds = new Set<string>();
 
     for (const row of rows) {
-      const deviceFeeds = this.extractDeviceFeeds(
-        row.mqttTopicSensor,
-        row.metaData,
-      );
-      for (const feed of deviceFeeds) {
-        feeds.add(feed);
+      // Ưu tiên SensorChannels
+      const sensorChannels: Array<{ feedKey: string }> = Array.isArray(
+        row.sensorChannels,
+      )
+        ? (row.sensorChannels as Array<{ feedKey: string }>)
+        : [];
+      if (sensorChannels.length > 0) {
+        for (const ch of sensorChannels) {
+          if (ch.feedKey) feeds.add(ch.feedKey);
+        }
+      } else {
+        // Backward compat
+        const deviceFeeds = this.extractDeviceFeeds(
+          row.mqttTopicSensor,
+          row.metaData,
+        );
+        for (const feed of deviceFeeds) {
+          feeds.add(feed);
+        }
       }
     }
 
@@ -501,15 +662,30 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     const rows = await this.prisma.device.findMany({
       select: {
         mqttTopicCmd: true,
+        // Include ActuatorChannels để lấy command feeds đúng
+        actuatorChannels: { select: { feedKey: true } },
       },
     });
 
     const feeds = new Set<string>();
 
     for (const row of rows) {
-      const commandFeeds = this.splitFeeds(row.mqttTopicCmd);
-      for (const feed of commandFeeds) {
-        feeds.add(feed);
+      // Ưu tiên ActuatorChannels
+      const actuatorChannels: Array<{ feedKey: string }> = Array.isArray(
+        row.actuatorChannels,
+      )
+        ? (row.actuatorChannels as Array<{ feedKey: string }>)
+        : [];
+      if (actuatorChannels.length > 0) {
+        for (const ch of actuatorChannels) {
+          if (ch.feedKey) feeds.add(ch.feedKey);
+        }
+      } else {
+        // Backward compat: dùng mqttTopicCmd
+        const commandFeeds = this.splitFeeds(row.mqttTopicCmd);
+        for (const feed of commandFeeds) {
+          feeds.add(feed);
+        }
       }
     }
 
@@ -895,11 +1071,16 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async evaluateThresholdAlerts(feed: string, value: unknown) {
-    const metric = this.detectMetric(feed);
-    if (!metric) return;
+    const observation = this.sensorObservationAdapter.adapt(feed, value);
+    const metric = observation.metric === 'custom' ? null : observation.metric;
+    if (!metric || observation.numericValue === null) return;
 
-    const numericValue = Number(value);
-    if (!Number.isFinite(numericValue)) return;
+    const sensorStrategy = this.sensorStrategyFactory.getStrategy(
+      observation.metric,
+    );
+    if (sensorStrategy.shouldIgnore(observation)) return;
+
+    const numericValue = observation.numericValue;
 
     this.metricState.set(metric, numericValue);
 
@@ -1104,25 +1285,17 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
   }
 
   private detectMetric(feed: string): MetricKey | null {
-    const normalized = feed.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const metric = resolveSensorMetric(feed);
 
-    if (
-      normalized.includes('temperature') ||
-      normalized.includes('temp') ||
-      normalized.includes('bbctemp')
-    ) {
+    if (metric === 'temperature') {
       return 'temperature';
     }
 
-    if (normalized.includes('humidity') || normalized.includes('hum')) {
+    if (metric === 'humidity') {
       return 'humidity';
     }
 
-    if (
-      normalized.includes('light') ||
-      normalized.includes('lux') ||
-      normalized.includes('ldr')
-    ) {
+    if (metric === 'light') {
       return 'light';
     }
 
@@ -1251,6 +1424,13 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
         const threshold = Number(candidate.threshold);
         const fanLevelOn = Number(candidate.fanLevelOn);
         const fanLevelOff = Number(candidate.fanLevelOff);
+        const priority = Number(candidate.priority);
+        const cooldownMs = Number(
+          (candidate as { cooldownMs?: unknown }).cooldownMs,
+        );
+        const categoryRaw = String(
+          (candidate as { category?: unknown }).category ?? 'normal',
+        ).toLowerCase();
 
         parsedRules.push({
           id: String(candidate.id ?? `${row.configKey}#${index + 1}`),
@@ -1265,6 +1445,13 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
           fanLevelOff: Number.isFinite(fanLevelOff)
             ? Math.max(0, Math.min(100, Math.round(fanLevelOff)))
             : 0,
+          priority: Number.isFinite(priority)
+            ? Math.max(0, Math.round(priority))
+            : 200,
+          cooldownMs: Number.isFinite(cooldownMs)
+            ? Math.max(0, Math.round(cooldownMs))
+            : 0,
+          category: categoryRaw === 'critical' ? 'critical' : 'normal',
           configKey: row.configKey,
         });
       }
@@ -1275,15 +1462,218 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     return parsedRules;
   }
 
+  private parseGroupCondition(value: unknown): DynamicFanGroupCondition | null {
+    if (!value || typeof value !== 'object') return null;
+    const candidate = value as {
+      sensorFeed?: unknown;
+      comparator?: unknown;
+      threshold?: unknown;
+    };
+
+    const sensorFeed = this.parseFeedKey(
+      String(candidate.sensorFeed ?? '').trim(),
+    );
+    if (!sensorFeed) return null;
+
+    const threshold = Number(candidate.threshold);
+    if (!Number.isFinite(threshold)) return null;
+
+    return {
+      sensorFeed,
+      comparator: candidate.comparator === 'lte' ? 'lte' : 'gte',
+      threshold,
+    };
+  }
+
+  private parseGroupOutput(value: unknown): DynamicFanGroupOutput | null {
+    if (!value || typeof value !== 'object') return null;
+    const candidate = value as {
+      fanFeed?: unknown;
+      fanLevelOn?: unknown;
+      fanLevelOff?: unknown;
+    };
+
+    const fanFeed = this.parseFeedKey(String(candidate.fanFeed ?? '').trim());
+    if (!fanFeed) return null;
+
+    const fanLevelOn = Number(candidate.fanLevelOn);
+    const fanLevelOff = Number(candidate.fanLevelOff);
+
+    return {
+      fanFeed: this.canonicalizeActuatorFeedKey(fanFeed),
+      fanLevelOn: Number.isFinite(fanLevelOn)
+        ? Math.max(0, Math.min(100, Math.round(fanLevelOn)))
+        : 70,
+      fanLevelOff: Number.isFinite(fanLevelOff)
+        ? Math.max(0, Math.min(100, Math.round(fanLevelOff)))
+        : 0,
+    };
+  }
+
+  private async getDynamicFanGroups(
+    force = false,
+  ): Promise<DynamicFanGroupRuleConfig[]> {
+    const now = Date.now();
+    if (!force && now - this.dynamicFanGroupsCachedAt < 5000) {
+      return this.dynamicFanGroupsCache;
+    }
+
+    const rows = await this.prisma.systemConfig.findMany({
+      where: {
+        configKey: {
+          startsWith: 'operatorFanRuleGroups.',
+        },
+      },
+      select: {
+        configKey: true,
+        configValue: true,
+      },
+    });
+
+    const parsedGroups: DynamicFanGroupRuleConfig[] = [];
+
+    for (const row of rows) {
+      const raw = String(row.configValue ?? '').trim();
+      if (!raw) continue;
+
+      let payload: unknown;
+      try {
+        payload = JSON.parse(raw) as unknown;
+      } catch {
+        continue;
+      }
+
+      if (!Array.isArray(payload)) continue;
+
+      for (let index = 0; index < payload.length; index += 1) {
+        const item = payload[index];
+        if (!item || typeof item !== 'object') continue;
+
+        const candidate = item as {
+          id?: unknown;
+          enabled?: unknown;
+          operator?: unknown;
+          conditions?: unknown;
+          outputs?: unknown;
+          priority?: unknown;
+          cooldownMs?: unknown;
+        };
+
+        const conditions = Array.isArray(candidate.conditions)
+          ? candidate.conditions
+              .map((entry) => this.parseGroupCondition(entry))
+              .filter((entry): entry is DynamicFanGroupCondition => !!entry)
+          : [];
+        if (conditions.length === 0) continue;
+
+        const outputs = Array.isArray(candidate.outputs)
+          ? candidate.outputs
+              .map((entry) => this.parseGroupOutput(entry))
+              .filter((entry): entry is DynamicFanGroupOutput => !!entry)
+          : [];
+        if (outputs.length === 0) continue;
+
+        const priority = Number(candidate.priority);
+        const cooldownMs = Number(candidate.cooldownMs);
+
+        parsedGroups.push({
+          id: String(candidate.id ?? `${row.configKey}#${index + 1}`),
+          enabled: Boolean(candidate.enabled),
+          operator:
+            String(candidate.operator ?? 'OR').toUpperCase() === 'AND'
+              ? 'AND'
+              : 'OR',
+          conditions,
+          outputs,
+          priority: Number.isFinite(priority)
+            ? Math.max(0, Math.round(priority))
+            : 100,
+          cooldownMs: Number.isFinite(cooldownMs)
+            ? Math.max(0, Math.round(cooldownMs))
+            : 0,
+          configKey: row.configKey,
+        });
+      }
+    }
+
+    this.dynamicFanGroupsCache = parsedGroups;
+    this.dynamicFanGroupsCachedAt = now;
+    return parsedGroups;
+  }
+
+  private async getDynamicFanConflictConfig(
+    force = false,
+  ): Promise<DynamicFanConflictConfig> {
+    const now = Date.now();
+    if (!force && now - this.dynamicFanConflictCachedAt < 5000) {
+      return this.dynamicFanConflictCache;
+    }
+
+    const rows = await this.prisma.systemConfig.findMany({
+      where: {
+        configKey: {
+          in: [
+            'operatorFanRuleConflict.defaultCooldownMs',
+            'operatorFanRuleConflict.allowEqualPriorityTakeover',
+          ],
+        },
+      },
+      select: {
+        configKey: true,
+        configValue: true,
+      },
+    });
+
+    const byKey = new Map<string, string>();
+    for (const row of rows) {
+      byKey.set(row.configKey, row.configValue ?? '');
+    }
+
+    const defaultCooldownMs = Number(
+      byKey.get('operatorFanRuleConflict.defaultCooldownMs') ?? '5000',
+    );
+    const allowEqualPriorityTakeover =
+      String(
+        byKey.get('operatorFanRuleConflict.allowEqualPriorityTakeover') ??
+          'false',
+      ) === 'true';
+
+    const config: DynamicFanConflictConfig = {
+      defaultCooldownMs: Number.isFinite(defaultCooldownMs)
+        ? Math.max(0, Math.round(defaultCooldownMs))
+        : 5000,
+      allowEqualPriorityTakeover,
+    };
+
+    this.dynamicFanConflictCache = config;
+    this.dynamicFanConflictCachedAt = now;
+    return config;
+  }
+
   private async hasEnabledDynamicRuleForSensorFeed(
     feed: string,
   ): Promise<boolean> {
     const normalizedFeed = this.normalizeFeedKey(feed);
-    const rules = await this.getDynamicFanRules();
-    return rules.some(
+    const [rules, groups] = await Promise.all([
+      this.getDynamicFanRules(),
+      this.getDynamicFanGroups(),
+    ]);
+
+    const hasAtom = rules.some(
       (rule) =>
         rule.enabled &&
         this.normalizeFeedKey(rule.sensorFeed) === normalizedFeed,
+    );
+
+    if (hasAtom) return true;
+
+    return groups.some(
+      (group) =>
+        group.enabled &&
+        group.conditions.some(
+          (condition) =>
+            this.normalizeFeedKey(condition.sensorFeed) === normalizedFeed,
+        ),
     );
   }
 
@@ -1465,46 +1855,150 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     feed: string,
     value: unknown,
   ): Promise<void> {
-    const incomingNumeric = Number(value);
-    if (!Number.isFinite(incomingNumeric)) return;
+    const observation = this.sensorObservationAdapter.adapt(feed, value);
+    if (observation.numericValue === null) return;
 
-    const metric = this.detectMetric(feed);
+    const sensorStrategy = this.sensorStrategyFactory.getStrategy(
+      observation.metric,
+    );
+    if (sensorStrategy.shouldIgnore(observation)) return;
+
+    const metric = observation.metric === 'custom' ? null : observation.metric;
     if (
       metric === 'temperature' &&
-      (this.isFaultTemperatureReading(incomingNumeric) ||
+      (this.isFaultTemperatureReading(observation.numericValue) ||
         this.isTemperatureFeedMarkedFaulty(feed))
     ) {
       return;
     }
 
-    const rules = await this.getDynamicFanRules();
-    if (rules.length === 0) return;
+    const [atomRules, groupRules, conflictConfig] = await Promise.all([
+      this.getDynamicFanRules(),
+      this.getDynamicFanGroups(),
+      this.getDynamicFanConflictConfig(),
+    ]);
 
-    const normalizedFeed = this.normalizeFeedKey(feed);
-    const matchedRules = rules.filter(
-      (rule) =>
-        rule.enabled &&
-        this.normalizeFeedKey(rule.sensorFeed) === normalizedFeed,
-    );
+    if (atomRules.length === 0 && groupRules.length === 0) return;
 
-    if (matchedRules.length === 0) return;
+    const matchedActions: ResolvedFanAction[] = [];
 
-    for (const rule of matchedRules) {
-      const matchedCondition =
-        rule.comparator === 'gte'
-          ? incomingNumeric >= rule.threshold
-          : incomingNumeric <= rule.threshold;
-
-      const nextLevel = matchedCondition ? rule.fanLevelOn : rule.fanLevelOff;
-      const currentLevel = this.findLatestFeedValue(rule.fanFeed);
-      if (currentLevel !== null && Math.round(currentLevel) === nextLevel) {
+    for (const rule of atomRules) {
+      if (!rule.enabled) continue;
+      if (
+        normalizePatternFeedKey(rule.sensorFeed) !== observation.normalizedFeed
+      ) {
         continue;
       }
 
-      await this.publishServerControl(rule.fanFeed, nextLevel);
+      const targetLevel = this.atomRuleSpecification.isSatisfied(
+        rule as DynamicFanRuleLike,
+        observation,
+      )
+        ? rule.fanLevelOn
+        : this.atomRuleSpecification.resolveFallbackLevel(
+            rule as DynamicFanRuleLike,
+          );
+
+      matchedActions.push({
+        ruleId: rule.id,
+        fanFeed: rule.fanFeed,
+        targetLevel,
+        priority: rule.priority,
+        cooldownMs: rule.cooldownMs,
+      });
+    }
+
+    for (const group of groupRules) {
+      const isMatched = this.groupRuleSpecification.isSatisfied(
+        group as DynamicFanGroupRuleLike,
+        observation,
+        (sensorFeed) => this.findLatestFeedValue(sensorFeed),
+        (sensorFeed, numericValue) =>
+          this.detectMetric(sensorFeed) === 'temperature' &&
+          (this.isFaultTemperatureReading(numericValue) ||
+            this.isTemperatureFeedMarkedFaulty(sensorFeed)),
+      );
+
+      if (!isMatched) {
+        continue;
+      }
+
+      for (const candidate of this.groupRuleSpecification.toCandidates(
+        group as DynamicFanGroupRuleLike,
+        true,
+      )) {
+        matchedActions.push(candidate);
+      }
+    }
+
+    if (matchedActions.length === 0) return;
+
+    const selectedByFeed = new Map<string, ResolvedFanAction>();
+    for (const action of matchedActions) {
+      const key = this.normalizeFeedKey(action.fanFeed);
+      const current = selectedByFeed.get(key);
+      if (!current) {
+        selectedByFeed.set(key, action);
+        continue;
+      }
+
+      if (action.priority > current.priority) {
+        selectedByFeed.set(key, action);
+      }
+    }
+
+    const now = Date.now();
+    for (const selected of selectedByFeed.values()) {
+      const stateKey = this.normalizeFeedKey(selected.fanFeed);
+      const previous = this.fanRuleResolutionState.get(stateKey);
+      const effectiveCooldown = Math.max(
+        selected.cooldownMs,
+        conflictConfig.defaultCooldownMs,
+      );
+
+      if (previous) {
+        const withinCooldown = now - previous.appliedAt < effectiveCooldown;
+        const lowerPriority = selected.priority < previous.priority;
+        const equalPriority = selected.priority === previous.priority;
+        const blockedEqualPriorityChange =
+          equalPriority &&
+          selected.ruleId !== previous.ruleId &&
+          selected.targetLevel !== previous.value &&
+          !conflictConfig.allowEqualPriorityTakeover;
+
+        // Controlled last-writer-wins: only allow replacing equal-priority writer when policy allows.
+        if (
+          (withinCooldown && lowerPriority) ||
+          (withinCooldown && blockedEqualPriorityChange)
+        ) {
+          continue;
+        }
+      }
+
+      const currentLevel = this.findLatestFeedValue(selected.fanFeed);
+      if (
+        currentLevel !== null &&
+        Math.round(currentLevel) === selected.targetLevel
+      ) {
+        this.fanRuleResolutionState.set(stateKey, {
+          ruleId: selected.ruleId,
+          priority: selected.priority,
+          value: selected.targetLevel,
+          appliedAt: now,
+        });
+        continue;
+      }
+
+      await this.publishServerControl(selected.fanFeed, selected.targetLevel);
+      this.fanRuleResolutionState.set(stateKey, {
+        ruleId: selected.ruleId,
+        priority: selected.priority,
+        value: selected.targetLevel,
+        appliedAt: now,
+      });
 
       this.logger.log(
-        `Dynamic fan rule ${rule.id} (${rule.configKey}) applied: ${rule.sensorFeed}=${incomingNumeric} ${rule.comparator} ${rule.threshold} => ${rule.fanFeed}=${nextLevel}`,
+        `Dynamic fan resolver applied: rule=${selected.ruleId} feed=${selected.fanFeed} level=${selected.targetLevel} priority=${selected.priority} cooldownMs=${effectiveCooldown}`,
       );
     }
   }

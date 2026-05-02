@@ -52,6 +52,7 @@ import {
   ApiAnalyticsHourly,
   ApiAnalyticsSummary,
   ApiAnalyticsTrend,
+  ApiAnalyticsMtbf,
   ApiBatch,
   ApiRecipe,
   batchesApi,
@@ -60,33 +61,6 @@ import {
 
 const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;
-
-const mtbfData = [
-  {
-    name: 'Conveyor Motor A1',
-    subtitle: 'Last maintenance: 45 days ago',
-    risk: 'High Risk',
-    riskColor: '#ff4d4f',
-    progress: 88,
-    progressColor: '#ff4d4f',
-  },
-  {
-    name: 'Heating Element Z2',
-    subtitle: 'Last maintenance: 2 days ago',
-    risk: 'Optimal',
-    riskColor: '#52c41a',
-    progress: 15,
-    progressColor: '#52c41a',
-  },
-  {
-    name: 'Fan Blower B4',
-    subtitle: 'Vibration detected',
-    risk: 'Monitor',
-    riskColor: '#faad14',
-    progress: 55,
-    progressColor: '#faad14',
-  },
-];
 
 interface CustomDotProps {
   cx?: number;
@@ -133,6 +107,7 @@ export default function DashboardPage() {
   const [trend, setTrend] = useState<ApiAnalyticsTrend | null>(null);
   const [hourly, setHourly] = useState<ApiAnalyticsHourly | null>(null);
   const [recipes, setRecipes] = useState<ApiRecipe[]>([]);
+  const [mtbfData, setMtbfData] = useState<ApiAnalyticsMtbf[]>([]);
   const [longRunningCount, setLongRunningCount] = useState(0);
 
   const query = useMemo(() => {
@@ -150,7 +125,7 @@ export default function DashboardPage() {
     const load = async () => {
       setLoading(true);
       try {
-        const [s, t, h, r, runningRes] = await Promise.all([
+        const [s, t, h, m, r, runningRes] = await Promise.all([
           analyticsApi.getSummary(query),
           analyticsApi.getTrend({
             ...query,
@@ -159,6 +134,7 @@ export default function DashboardPage() {
             pageSize: 100,
           }),
           analyticsApi.getHourlyAvg({ ...query, metric: 'temperature' }),
+          analyticsApi.getMtbf(query),
           recipesApi.getAll({ includeInactive: true }),
           batchesApi.getAll({
             status: 'running',
@@ -171,6 +147,7 @@ export default function DashboardPage() {
         setSummary(s);
         setTrend(t);
         setHourly(h);
+        setMtbfData(m);
         setRecipes(r);
         setLongRunningCount(runningRes.items.filter((batch) => isBatchRunningLong(batch)).length);
       } catch {
@@ -254,9 +231,7 @@ export default function DashboardPage() {
       : []),
   ];
 
-  const goToBatches = (status: 'all' | 'running' | 'completed' | 'fail') => {
-    router.push(status === 'all' ? '/manager/batches' : `/manager/batches?status=${status}`);
-  };
+
 
   return (
     <div>
@@ -301,30 +276,13 @@ export default function DashboardPage() {
         </div>
       ) : (
         <>
-          {/* Operational Alerts */}
-          {managerAlerts.length > 0 && (
-            <Card title="Cảnh báo vận hành" style={{ borderRadius: 7, marginBottom: 16 }}>
-              <Space direction="vertical" style={{ width: '100%' }} size={12}>
-                {managerAlerts.map((alert) => (
-                  <Alert
-                    key={alert.key}
-                    type={alert.type as 'error' | 'warning' | 'info'}
-                    showIcon
-                    message={alert.title}
-                    description={alert.message}
-                  />
-                ))}
-              </Space>
-            </Card>
-          )}
+          
 
           {/* Summary Cards */}
           <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
             <Col xs={24} sm={12} lg={6}>
               <Card
-                hoverable
-                onClick={() => goToBatches('all')}
-                style={{ borderRadius: 7, borderBottom: '3px solid #1677ff', cursor: 'pointer' }}
+                style={{ borderRadius: 7, borderBottom: '3px solid #1677ff', cursor: 'default' }}
                 styles={{ body: { padding: '20px 24px' } }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -354,9 +312,7 @@ export default function DashboardPage() {
 
             <Col xs={24} sm={12} lg={6}>
               <Card
-                hoverable
-                onClick={() => goToBatches('running')}
-                style={{ borderRadius: 7, borderBottom: '3px solid #faad14', cursor: 'pointer' }}
+                style={{ borderRadius: 7, borderBottom: '3px solid #faad14', cursor: 'default' }}
                 styles={{ body: { padding: '20px 24px' } }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -386,9 +342,7 @@ export default function DashboardPage() {
 
             <Col xs={24} sm={12} lg={6}>
               <Card
-                hoverable
-                onClick={() => goToBatches('fail')}
-                style={{ borderRadius: 7, borderBottom: '3px solid #ff4d4f', cursor: 'pointer' }}
+                style={{ borderRadius: 7, borderBottom: '3px solid #ff4d4f', cursor: 'default' }}
                 styles={{ body: { padding: '20px 24px' } }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -454,7 +408,22 @@ export default function DashboardPage() {
               </Card>
             </Col>
           </Row>
-
+          {/* Operational Alerts */}
+          {managerAlerts.length > 0 && (
+            <Card title="Cảnh báo vận hành" style={{ borderRadius: 7, marginBottom: 16 }}>
+              <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                {managerAlerts.map((alert) => (
+                  <Alert
+                    key={alert.key}
+                    type={alert.type as 'error' | 'warning' | 'info'}
+                    showIcon
+                    message={alert.title}
+                    description={alert.message}
+                  />
+                ))}
+              </Space>
+            </Card>
+          )}
           {/* Middle: Bar Chart + Donut Chart */}
           <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
             {/* Bar Chart */}

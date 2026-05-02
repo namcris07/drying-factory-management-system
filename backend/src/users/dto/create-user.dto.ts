@@ -7,6 +7,7 @@ import {
   IsString,
   MinLength,
   ArrayUnique,
+  IsIn,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -29,6 +30,7 @@ export class CreateUserDto {
 
   @IsNotEmpty()
   @IsString()
+  @IsIn(['Admin', 'Manager', 'Operator'])
   role: string;
 
   @IsOptional()
@@ -40,4 +42,19 @@ export class CreateUserDto {
   @Type(() => Number)
   @IsInt({ each: true })
   chamberIDs?: number[];
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  organizationID?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  factoryID?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  siteID?: number;
 }

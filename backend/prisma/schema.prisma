@@ -10,6 +10,64 @@ datasource db {
 }
 
 // ─────────────────────────────────────────────
+// Organization / Factory / Site
+// ─────────────────────────────────────────────
+
+model Organization {
+  organizationID   Int     @id @default(autoincrement()) @map("OrganizationID")
+  organizationName String? @map("OrganizationName")
+  organizationCode String? @unique @map("OrganizationCode")
+  status           String? @map("Status")
+
+  users     User[]
+  zones     Zone[]
+  devices   Device[]
+  recipes   Recipe[]
+  batches   Batch[]
+  alerts    Alert[]
+  factories Factory[]
+
+  @@map("Organizations")
+}
+
+model Factory {
+  factoryID      Int     @id @default(autoincrement()) @map("FactoryID")
+  organizationID Int?    @map("OrganizationID")
+  factoryName    String? @map("FactoryName")
+  factoryCode    String? @unique @map("FactoryCode")
+  status         String? @map("Status")
+
+  organization Organization? @relation(fields: [organizationID], references: [organizationID])
+  users        User[]
+  zones        Zone[]
+  devices      Device[]
+  recipes      Recipe[]
+  batches      Batch[]
+  alerts       Alert[]
+  sites        Site[]
+
+  @@map("Factories")
+}
+
+model Site {
+  siteID    Int     @id @default(autoincrement()) @map("SiteID")
+  factoryID Int?    @map("FactoryID")
+  siteName  String? @map("SiteName")
+  siteCode  String? @unique @map("SiteCode")
+  status    String? @map("Status")
+
+  factory Factory? @relation(fields: [factoryID], references: [factoryID])
+  users   User[]
+  zones   Zone[]
+  devices Device[]
+  recipes Recipe[]
+  batches Batch[]
+  alerts  Alert[]
+
+  @@map("Sites")
+}
+
+// ─────────────────────────────────────────────
 // User & Access
 // ─────────────────────────────────────────────
 
@@ -25,6 +83,13 @@ model User {
   status      String?
   createdAt   DateTime? @db.Timestamptz
   role        String?   @map("Role")
+  organizationID Int?   @map("OrganizationID")
+  factoryID      Int?   @map("FactoryID")
+  siteID         Int?   @map("SiteID")
+
+  organization Organization? @relation(fields: [organizationID], references: [organizationID])
+  factory      Factory?      @relation(fields: [factoryID], references: [factoryID])
+  site         Site?         @relation(fields: [siteID], references: [siteID])
 
   zones               Zone[]
   recipes             Recipe[]
@@ -45,8 +110,14 @@ model Zone {
   zoneName        String? @map("ZoneName")
   zoneDescription String? @map("ZoneDescription")
   userID          Int?    @map("userID")
+  organizationID  Int?    @map("OrganizationID")
+  factoryID       Int?    @map("FactoryID")
+  siteID          Int?    @map("SiteID")
 
   user    User?    @relation(fields: [userID], references: [userID])
+  organization Organization? @relation(fields: [organizationID], references: [organizationID])
+  factory      Factory?      @relation(fields: [factoryID], references: [factoryID])
+  site         Site?         @relation(fields: [siteID], references: [siteID])
   devices Device[]
 
   @@map("Zones")
@@ -61,13 +132,55 @@ model Device {
   deviceType      String? @map("DeviceType")
   metaData        Json?   @map("MetaData")
   zoneID          Int?    @map("ZoneID")
+  organizationID  Int?    @map("OrganizationID")
+  factoryID       Int?    @map("FactoryID")
+  siteID          Int?    @map("SiteID")
 
   zone       Zone?           @relation(fields: [zoneID], references: [zoneID])
+  organization Organization? @relation(fields: [organizationID], references: [organizationID])
+  factory      Factory?      @relation(fields: [factoryID], references: [factoryID])
+  site         Site?         @relation(fields: [siteID], references: [siteID])
   batches    Batch[]
   sensorLogs SensorDataLog[]
   alerts     Alert[]
+  sensorChannels   SensorChannel[]
+  actuatorChannels ActuatorChannel[]
 
   @@map("Devices")
+}
+
+model SensorChannel {
+  sensorChannelID Int     @id @default(autoincrement()) @map("SensorChannelID")
+  deviceID        Int?    @map("DeviceID")
+  sensorName      String? @map("SensorName")
+  sensorType      String? @map("SensorType")
+  feedKey         String  @unique @map("FeedKey")
+  status          String? @map("Status")
+  unit            String? @map("Unit")
+  sortOrder       Int?    @map("SortOrder")
+  metaData        Json?   @map("MetaData")
+
+  device Device? @relation(fields: [deviceID], references: [deviceID])
+
+  @@map("SensorChannels")
+}
+
+model ActuatorChannel {
+  actuatorChannelID Int     @id @default(autoincrement()) @map("ActuatorChannelID")
+  deviceID          Int?    @map("DeviceID")
+  actuatorName      String? @map("ActuatorName")
+  actuatorType      String? @map("ActuatorType")
+  feedKey           String  @unique @map("FeedKey")
+  status            String? @map("Status")
+  controlMode       String? @map("ControlMode")
+  onValue           String? @map("OnValue")
+  offValue          String? @map("OffValue")
+  sortOrder         Int?    @map("SortOrder")
+  metaData          Json?   @map("MetaData")
+
+  device Device? @relation(fields: [deviceID], references: [deviceID])
+
+  @@map("ActuatorChannels")
 }
 
 // ─────────────────────────────────────────────
@@ -80,9 +193,15 @@ model Recipe {
   recipeFruits    String? @map("RecipeFruits")
   timeDurationEst Int?    @map("TimeDurationEst")
   userID          Int?    @map("userID")
+  organizationID  Int?    @map("OrganizationID")
+  factoryID       Int?    @map("FactoryID")
+  siteID          Int?    @map("SiteID")
   isActive        Boolean @default(true) @map("IsActive")
 
   user                User?                @relation(fields: [userID], references: [userID])
+  organization        Organization?        @relation(fields: [organizationID], references: [organizationID])
+  factory             Factory?             @relation(fields: [factoryID], references: [factoryID])
+  site                Site?                @relation(fields: [siteID], references: [siteID])
   steps               RecipeStep[]
   stages              RecipeStage[]
   batches             Batch[]
@@ -147,9 +266,15 @@ model Batch {
   stageStartedAt DateTime? @db.Timestamptz @map("StageStartedAt")
   recipeID      Int?    @map("RecipeID")
   deviceID      Int?    @map("DeviceID")
+  organizationID Int?   @map("OrganizationID")
+  factoryID      Int?   @map("FactoryID")
+  siteID         Int?   @map("SiteID")
 
   recipe          Recipe?          @relation(fields: [recipeID], references: [recipeID])
   device          Device?          @relation(fields: [deviceID], references: [deviceID])
+  organization    Organization?    @relation(fields: [organizationID], references: [organizationID])
+  factory         Factory?         @relation(fields: [factoryID], references: [factoryID])
+  site            Site?            @relation(fields: [siteID], references: [siteID])
   batchOperations BatchOperation[]
   alerts          Alert[]
 
@@ -221,9 +346,15 @@ model Alert {
   alertStatus  String?   @map("AlertStatus")
   deviceID     Int?      @map("DeviceID")
   batchesID    Int?      @map("BatchesID")
+  organizationID Int?    @map("OrganizationID")
+  factoryID      Int?    @map("FactoryID")
+  siteID         Int?    @map("SiteID")
 
   device           Device?           @relation(fields: [deviceID], references: [deviceID])
   batch            Batch?            @relation(fields: [batchesID], references: [batchesID])
+  organization     Organization?     @relation(fields: [organizationID], references: [organizationID])
+  factory          Factory?          @relation(fields: [factoryID], references: [factoryID])
+  site             Site?             @relation(fields: [siteID], references: [siteID])
   alertResolutions AlertResolution[]
 
   @@map("Alerts")

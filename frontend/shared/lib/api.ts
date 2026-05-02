@@ -6,6 +6,32 @@
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4001/api';
 
+function getActorHeaders(): Record<string, string> {
+  if (typeof window === 'undefined') return {};
+
+  try {
+    const raw = localStorage.getItem('drytechUser');
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as {
+      userID?: unknown;
+      role?: unknown;
+    };
+
+    const userID = Number(parsed.userID);
+    const role = String(parsed.role ?? '');
+
+    if (!Number.isInteger(userID) || userID <= 0) return {};
+    if (role !== 'Admin' && role !== 'Manager' && role !== 'Operator') return {};
+
+    return {
+      'x-user-id': String(userID),
+      'x-user-role': role,
+    };
+  } catch {
+    return {};
+  }
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -17,8 +43,13 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const actorHeaders = getActorHeaders();
   const res = await fetch(`${BASE_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
+    headers: {
+      'Content-Type': 'application/json',
+      ...actorHeaders,
+      ...init?.headers,
+    },
     ...init,
   });
   if (!res.ok) {
@@ -113,6 +144,12 @@ export type ApiChamber = {
     feedKey: string;
     status: string;
   }[];
+  actuatorChannels: {
+    actuatorName: string;
+    actuatorType: string;
+    feedKey: string;
+    status: string;
+  }[];
 };
 
 export const chambersApi = {
@@ -129,6 +166,18 @@ export const chambersApi = {
       feedKey: string;
       status?: string;
     }[];
+    sensorChannels?: {
+      sensorName?: string;
+      sensorType: string;
+      feedKey: string;
+      status?: string;
+    }[];
+    actuatorChannels?: {
+      actuatorName?: string;
+      actuatorType: string;
+      feedKey: string;
+      status?: string;
+    }[];
   }) =>
     request<ApiChamber>('/chambers', { method: 'POST', body: JSON.stringify(data) }),
   update: (id: number, data: Partial<{
@@ -139,6 +188,18 @@ export const chambersApi = {
     sensors: {
       sensorName?: string;
       sensorType: string;
+      feedKey: string;
+      status?: string;
+    }[];
+    sensorChannels: {
+      sensorName?: string;
+      sensorType: string;
+      feedKey: string;
+      status?: string;
+    }[];
+    actuatorChannels: {
+      actuatorName?: string;
+      actuatorType: string;
       feedKey: string;
       status?: string;
     }[];
@@ -154,10 +215,34 @@ export type ApiDevice = {
   deviceStatus: string | null;
   deviceType: string | null;
   mqttTopicSensor: string | null;
+  mqttTopicCmd: string | null;
   sensorFeeds?: string[];
   zoneID: number | null;
   zone: { zoneID: number; zoneName: string | null } | null;
   metaData: Record<string, unknown> | null;
+  organizationID: number | null;
+  factoryID: number | null;
+  siteID: number | null;
+  sensorChannels?: {
+    sensorChannelID?: number;
+    sensorName: string | null;
+    sensorType: string | null;
+    feedKey: string;
+    status: string | null;
+    unit: string | null;
+    sortOrder: number | null;
+  }[];
+  actuatorChannels?: {
+    actuatorChannelID?: number;
+    actuatorName: string | null;
+    actuatorType: string | null;
+    feedKey: string;
+    status: string | null;
+    controlMode: string | null;
+    onValue: string | null;
+    offValue: string | null;
+    sortOrder: number | null;
+  }[];
 };
 
 export type DeviceUpsertPayload = {
@@ -165,8 +250,30 @@ export type DeviceUpsertPayload = {
   deviceStatus?: string;
   deviceType?: string;
   mqttTopicSensor?: string;
+  mqttTopicCmd?: string;
   zoneID?: number;
   metaData?: Record<string, unknown>;
+  sensorChannels?: {
+    sensorName?: string;
+    sensorType?: string;
+    feedKey: string;
+    status?: string;
+    unit?: string;
+    sortOrder?: number;
+  }[];
+  actuatorChannels?: {
+    actuatorName?: string;
+    actuatorType?: string;
+    feedKey: string;
+    status?: string;
+    controlMode?: string;
+    onValue?: string;
+    offValue?: string;
+    sortOrder?: number;
+  }[];
+  organizationID?: number;
+  factoryID?: number;
+  siteID?: number;
 };
 
 export type DevicePatchPayload = Partial<DeviceUpsertPayload>;
@@ -179,6 +286,9 @@ export const devicesApi = {
     request<ApiDevice>(`/devices/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   validateFeeds: (data: {
     mqttTopicSensor?: string;
+    mqttTopicCmd?: string;
+    sensorChannels?: { feedKey: string }[];
+    actuatorChannels?: { feedKey: string }[];
     currentDeviceId?: number;
   }) => request<{ ok: boolean }>('/devices/validate-feeds', {
     method: 'POST',
@@ -508,6 +618,15 @@ export const mqttApi = {
     return params.toString();
   };
 
+  export type ApiAnalyticsMtbf = {
+    name: string;
+    subtitle: string;
+    risk: string;
+    riskColor: string;
+    progress: number;
+    progressColor: string;
+  };
+
   export const analyticsApi = {
     getSummary: (query?: AnalyticsQuery) => {
       const params = buildAnalyticsQuery(query);
@@ -543,6 +662,12 @@ export const mqttApi = {
       const q = params.toString();
       return request<ApiAnalyticsHourly>(
         `/analytics/hourly-avg${q ? `?${q}` : ''}`,
+      );
+    },
+    getMtbf: (query?: AnalyticsQuery) => {
+      const params = buildAnalyticsQuery(query);
+      return request<ApiAnalyticsMtbf[]>(
+        `/analytics/mtbf${params ? `?${params}` : ''}`,
       );
     },
   };

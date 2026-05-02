@@ -4,7 +4,7 @@ import { IsInt, IsNotEmpty, IsOptional, IsString, Min } from 'class-validator';
 export class ResolveAlertDto {
   @IsNotEmpty()
   @IsString()
-  resolveStatus: string;
+  resolveStatus!: string;
 
   @IsOptional()
   @IsString()
@@ -35,4 +35,13 @@ export class CreateAlertDto {
 
   @IsOptional()
   batchesID?: number;
+
+  @IsOptional()
+  organizationID?: number;
+
+  @IsOptional()
+  factoryID?: number;
+
+  @IsOptional()
+  siteID?: number;
 }

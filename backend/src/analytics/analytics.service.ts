@@ -402,4 +402,65 @@ export class AnalyticsService {
       points,
     };
   }
+
+  async getMtbf(query: AnalyticsQuery) {
+    const devices = await this.prisma.device.findMany({
+      where: query.zoneId ? { zoneID: query.zoneId } : undefined,
+      include: {
+        alerts: {
+          orderBy: { alertTime: 'desc' },
+        },
+      },
+    });
+
+    const result = devices.map((device) => {
+      const allAlerts = device.alerts || [];
+      const errorAlerts = allAlerts.filter(
+        (a) =>
+          (a.alertType ?? '').toLowerCase().includes('error') ||
+          (a.alertType ?? '').toLowerCase().includes('fault') ||
+          (a.alertType ?? '').toLowerCase().includes('fail'),
+      );
+
+      const numFailures = errorAlerts.length;
+      const lastAlert = allAlerts[0]?.alertTime;
+
+      let risk = 'Optimal';
+      let riskColor = '#52c41a';
+      let progress = 15;
+
+      if (numFailures >= 5) {
+        risk = 'High Risk';
+        riskColor = '#ff4d4f';
+        progress = Math.min(100, 70 + numFailures * 5);
+      } else if (numFailures >= 2) {
+        risk = 'Monitor';
+        riskColor = '#faad14';
+        progress = Math.min(100, 40 + numFailures * 10);
+      } else if (numFailures === 1) {
+        risk = 'Optimal';
+        riskColor = '#52c41a';
+        progress = 25;
+      }
+
+      let subtitle = 'Chưa từng hỏng hóc';
+      if (lastAlert) {
+        const days = Math.floor(
+          (Date.now() - lastAlert.getTime()) / (1000 * 60 * 60 * 24),
+        );
+        subtitle = `Sự cố cuối: ${days} ngày trước`;
+      }
+
+      return {
+        name: device.deviceName || `Buồng sấy ${device.deviceID}`,
+        subtitle,
+        risk,
+        riskColor,
+        progress,
+        progressColor: riskColor,
+      };
+    });
+
+    return result.sort((a, b) => b.progress - a.progress).slice(0, 5);
+  }
 }

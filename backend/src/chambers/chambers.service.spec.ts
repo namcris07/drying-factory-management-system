@@ -12,6 +12,16 @@ describe('ChambersService', () => {
         update: jest.fn(),
         delete: jest.fn(),
       },
+      sensorChannel: {
+        findMany: jest.fn().mockResolvedValue([]),
+        deleteMany: jest.fn(),
+        createMany: jest.fn(),
+      },
+      actuatorChannel: {
+        findMany: jest.fn().mockResolvedValue([]),
+        deleteMany: jest.fn(),
+        createMany: jest.fn(),
+      },
       $executeRawUnsafe: jest.fn(),
     };
 
@@ -121,6 +131,75 @@ describe('ChambersService', () => {
     expect(created).toMatchObject({ chamberID: 5 });
   });
 
+  it('create persists normalized sensors and actuators and subscribes mqtt feeds', async () => {
+    const { service, prisma } = createService();
+
+    prisma.device.findMany.mockResolvedValue([]);
+    prisma.device.create.mockResolvedValue({ deviceID: 9 });
+    prisma.device.findUnique.mockResolvedValue({
+      deviceID: 9,
+      deviceName: 'Chamber 9',
+      deviceStatus: 'Active',
+      zoneID: 7,
+      zone: { zoneName: 'Zone 7' },
+      mqttTopicSensor: 'line9/temp',
+      mqttTopicCmd: 'line9/fan',
+      metaData: {
+        chamberDescription: 'Desc',
+        sensors: [
+          {
+            sensorName: 'Temp',
+            sensorType: 'Temperature',
+            feedKey: 'line9/temp',
+            status: 'Active',
+          },
+        ],
+        actuatorChannels: [
+          {
+            actuatorName: 'Fan',
+            actuatorType: 'Fan',
+            feedKey: 'line9/fan',
+            status: 'Active',
+          },
+        ],
+      },
+      sensorChannels: [],
+      actuatorChannels: [],
+    });
+
+    const created = await service.create({
+      chamberName: 'Chamber 9',
+      chamberDescription: 'Desc',
+      zoneID: 7,
+      sensors: [
+        {
+          sensorName: 'Temp',
+          sensorType: 'Temperature',
+          feedKey: 'line9/temp',
+          status: 'Active',
+        },
+      ],
+      actuatorChannels: [
+        {
+          actuatorName: 'Fan',
+          actuatorType: 'Fan',
+          feedKey: 'line9/fan',
+          status: 'Active',
+        },
+      ],
+    } as any);
+
+    expect(prisma.device.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          mqttTopicSensor: 'line9/temp',
+          mqttTopicCmd: 'line9/fan',
+        }),
+      }),
+    );
+    expect(created).toMatchObject({ chamberID: 9 });
+  });
+
   it('update uses existing sensors when dto omits sensors', async () => {
     const { service, prisma, mqttService } = createService();
 
@@ -175,7 +254,7 @@ describe('ChambersService', () => {
     expect(updated).toMatchObject({ chamberID: 6 });
   });
 
-  it('remove deletes chamber and returns ok', async () => {
+  it('remove soft-deletes chamber and returns ok', async () => {
     const { service, prisma } = createService();
 
     prisma.device.findUnique.mockResolvedValue({
@@ -187,11 +266,12 @@ describe('ChambersService', () => {
       mqttTopicSensor: null,
       metaData: null,
     });
-    prisma.device.delete.mockResolvedValue({});
+    prisma.device.update.mockResolvedValue({});
 
     await expect(service.remove(8)).resolves.toEqual({ ok: true });
-    expect(prisma.device.delete).toHaveBeenCalledWith({
+    expect(prisma.device.update).toHaveBeenCalledWith({
       where: { deviceID: 8 },
+      data: { deviceStatus: 'Deleted' },
     });
   });
 
