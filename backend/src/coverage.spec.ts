@@ -47,6 +47,7 @@ const createPrismaMock = () => {
     alert: {
       findMany: jest.fn(),
       findUnique: jest.fn(),
+      findFirst: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
       count: jest.fn(),
@@ -64,6 +65,7 @@ const createPrismaMock = () => {
     },
     batch: {
       findMany: jest.fn(),
+      findFirst: jest.fn(),
       count: jest.fn(),
       findUnique: jest.fn(),
       create: jest.fn(),
@@ -262,6 +264,118 @@ describe('Services coverage', () => {
     expect(prisma.batchOperation.create).toHaveBeenCalled();
     expect(prisma.batch.update).toHaveBeenCalled();
     expect(prisma.batch.delete).toHaveBeenCalled();
+  });
+
+  it('batches service pauses on stage transition in manual mode and resumes on applyStageSetpoints', async () => {
+    const mqttService = {
+      publishCommand: jest.fn().mockResolvedValue({ ok: true }),
+    };
+    const service = new BatchesService(prisma as any, mqttService as any);
+
+    jest.spyOn(service as any, 'getConfigValue').mockImplementation((key) => {
+      if (key === 'temperatureSetpointFeed')
+        return Promise.resolve('temp_setpoint');
+      if (key === 'humiditySetpointFeed')
+        return Promise.resolve('hum_setpoint');
+      return Promise.resolve(null);
+    });
+
+    const now = new Date();
+    const startedAt = new Date(now.getTime() - 12 * 60_000);
+
+    const mockBatch = {
+      batchesID: 1,
+      batchStatus: 'Running',
+      operationMode: 'manual',
+      currentStage: 1,
+      startedAt: startedAt,
+      stageStartedAt: startedAt,
+      recipe: {
+        recipeID: 1,
+        recipeName: 'Recipe 1',
+        stages: [
+          {
+            stageID: 1,
+            stageOrder: 1,
+            durationMinutes: 10,
+            temperatureSetpoint: 60,
+            humiditySetpoint: 30,
+          },
+          {
+            stageID: 2,
+            stageOrder: 2,
+            durationMinutes: 10,
+            temperatureSetpoint: 65,
+            humiditySetpoint: 25,
+          },
+        ],
+      },
+      device: { deviceID: 1, deviceName: 'Chamber 1' },
+    };
+
+    prisma.batch.findUnique.mockResolvedValue(mockBatch);
+    prisma.alert.findFirst.mockResolvedValue(null);
+    prisma.alert.create.mockResolvedValue({ alertID: 1 });
+    prisma.batch.update.mockResolvedValue({
+      ...mockBatch,
+      batchStatus: 'Paused',
+    });
+
+    await (service as any).synchronizeBatchProgress(1);
+
+    expect(prisma.batch.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { batchesID: 1 },
+        data: expect.objectContaining({ batchStatus: 'Paused' }),
+      }),
+    );
+    expect(prisma.alert.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          alertType: 'info',
+          alertStatus: 'pending',
+          alertMessage: expect.stringContaining('Giai đoạn 2 bắt đầu'),
+        }),
+      }),
+    );
+
+    const alertTime = new Date(now.getTime() - 2 * 60_000);
+    prisma.alert.findFirst.mockResolvedValue({
+      alertID: 100,
+      alertTime: alertTime,
+    });
+    prisma.batch.findUnique.mockResolvedValue({
+      ...mockBatch,
+      batchStatus: 'Paused',
+      currentStage: 2,
+    });
+
+    prisma.batch.update.mockResolvedValue({
+      ...mockBatch,
+      batchStatus: 'Running',
+    });
+
+    await service.applyStageSetpoints(1, 2);
+
+    const expectedStartedAt = new Date(startedAt.getTime() + 2 * 60_000);
+    expect(prisma.batch.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { batchesID: 1 },
+        data: expect.objectContaining({
+          batchStatus: 'Running',
+          startedAt: expect.any(Date),
+        }),
+      }),
+    );
+
+    const updateCall = prisma.batch.update.mock.calls.find(
+      (call: any) => call[0].data.batchStatus === 'Running',
+    );
+    const passedStartedAt = updateCall[0].data.startedAt;
+    const diff = Math.abs(
+      passedStartedAt.getTime() - expectedStartedAt.getTime(),
+    );
+    expect(diff).toBeLessThan(1000);
   });
 
   it('devices service handles crud and not found', async () => {

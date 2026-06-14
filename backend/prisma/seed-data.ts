@@ -188,4 +188,7 @@ export const configData: Record<string, string> = {
   operatingModeFeed: 'mode_state',
   maintenanceIntervalDays: '30',
   maxConcurrentBatches: '10',
+  stabilizationPeriodMinutes: '15',
+  temperatureSetpointFeed: 'drytech.m-a1-temp',
+  humiditySetpointFeed: 'drytech.m-a1-humidity',
 };

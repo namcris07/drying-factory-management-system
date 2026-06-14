@@ -283,6 +283,8 @@ export default function OperatorMachineDetailPage() {
   >(null);
   const [completionNotice, setCompletionNotice] =
     useState<CompletionNotice | null>(null);
+  const [activeBatchStatus, setActiveBatchStatus] = useState<string | null>(null);
+  const [activeBatchElapsedMs, setActiveBatchElapsedMs] = useState<number | null>(null);
   const [panelMode, setPanelMode] = useState<PanelMode>("overview");
   const [actuatorFilter, setActuatorFilter] = useState<ActuatorFilter>("all");
   const [actuatorBusyMap, setActuatorBusyMap] = useState<
@@ -1035,6 +1037,10 @@ export default function OperatorMachineDetailPage() {
     : null;
 
   const elapsedMsSnapshot = (() => {
+    if (activeBatchElapsedMs !== null && activeBatchElapsedMs !== undefined) {
+      return activeBatchElapsedMs;
+    }
+
     if (activeBatchStartedAt) {
       const startedAt = new Date(activeBatchStartedAt);
       if (!Number.isNaN(startedAt.getTime())) {
@@ -1178,7 +1184,7 @@ export default function OperatorMachineDetailPage() {
   useEffect(() => {
     const id = setInterval(() => {
       setNowSnapshot(Date.now());
-    }, 30000);
+    }, 1000);
     return () => clearInterval(id);
   }, []);
 
@@ -1195,6 +1201,7 @@ export default function OperatorMachineDetailPage() {
     let mounted = true;
     const runningStatuses = new Set([
       "Running",
+      "Paused",
       "InProgress",
       "Active",
       "Processing",
@@ -1292,6 +1299,8 @@ export default function OperatorMachineDetailPage() {
           lastSeenStageRef.current = null;
           setActiveBatchId(null);
           setActiveBatchStartedAt(null);
+          setActiveBatchStatus(null);
+          setActiveBatchElapsedMs(null);
           setActiveBatchTotalMinutes(null);
           setCurrentBatchStage(null);
           setCurrentStageSetpoint(null);
@@ -1307,9 +1316,29 @@ export default function OperatorMachineDetailPage() {
         const detail = await batchesApi.getOne(activeBatch.batchesID);
         if (!mounted) return;
 
-        setActiveBatchStartedAt(
-          detail.startedAt ?? activeBatch.startedAt ?? null,
-        );
+        const startedAt = detail.startedAt ?? activeBatch.startedAt ?? null;
+        setActiveBatchStartedAt(startedAt);
+        setActiveBatchStatus(detail.batchStatus ?? activeBatch.batchStatus ?? null);
+
+        if (detail.batchStatus === "Paused" && startedAt) {
+          const startedAtTime = new Date(startedAt).getTime();
+          const stageStartedAtTime = detail.stageStartedAt ? new Date(detail.stageStartedAt).getTime() : null;
+          if (stageStartedAtTime) {
+            setActiveBatchElapsedMs(Math.max(0, stageStartedAtTime - startedAtTime));
+          } else {
+            const pendingAlert = detail.alerts?.find(
+              (a) => a.alertType === "info" && a.alertStatus === "pending"
+            );
+            if (pendingAlert && pendingAlert.alertTime) {
+              const pauseStart = new Date(pendingAlert.alertTime).getTime();
+              setActiveBatchElapsedMs(Math.max(0, pauseStart - startedAtTime));
+            } else {
+              setActiveBatchElapsedMs(null);
+            }
+          }
+        } else {
+          setActiveBatchElapsedMs(null);
+        }
 
         const stages = detail.recipe?.stages ?? [];
         const stageDurationMinutes = stages.reduce((sum, stage) => {
@@ -1517,6 +1546,10 @@ export default function OperatorMachineDetailPage() {
   };
 
   const applyCurrentStageToManual = async () => {
+    if (!activeBatchId) {
+      message.warning("Không tìm thấy mẻ sấy đang hoạt động.");
+      return;
+    }
     if (!currentStageSetpoint) {
       message.warning("Chưa đồng bộ được setpoint của giai đoạn hiện tại.");
       return;
@@ -1537,10 +1570,29 @@ export default function OperatorMachineDetailPage() {
       manualTargetTemp: nextTemp,
       manualTargetHumidity: nextHumidity,
     });
-    setPendingManualStageOrder(null);
-    message.success(
-      `Đã áp dụng setpoint giai đoạn ${currentStageSetpoint.stageOrder} cho Manual.`,
-    );
+
+    let userID: number | undefined;
+    try {
+      const raw = localStorage.getItem("drytechUser");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed.userID) userID = Number(parsed.userID);
+      }
+    } catch {}
+
+    try {
+      const result = await batchesApi.applyStageSetpoint(activeBatchId, userID);
+      if (result.ok) {
+        setPendingManualStageOrder(null);
+        message.success(
+          `Đã áp dụng setpoint giai đoạn ${currentStageSetpoint.stageOrder} và tiếp tục mẻ sấy.`,
+        );
+      } else {
+        message.error(result.note || "Không thể tiếp tục mẻ sấy.");
+      }
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "Lỗi khi áp dụng setpoint.");
+    }
   };
 
   const applyManualRecommendedFan = async () => {
@@ -1977,7 +2029,7 @@ export default function OperatorMachineDetailPage() {
                 {machine.id} · {machine.name}
               </Title>
               <Tag
-                color={cfg.tagColor}
+                color={activeBatchStatus === "Paused" ? "warning" : cfg.tagColor}
                 style={{
                   borderRadius: 20,
                   fontSize: 14,
@@ -1985,7 +2037,9 @@ export default function OperatorMachineDetailPage() {
                   border: "none",
                 }}
                 icon={
-                  isRunning ? (
+                  activeBatchStatus === "Paused" ? (
+                    <PauseCircleOutlined />
+                  ) : isRunning ? (
                     <ThunderboltOutlined />
                   ) : isIdle ? (
                     <PauseCircleOutlined />
@@ -1996,7 +2050,7 @@ export default function OperatorMachineDetailPage() {
                   )
                 }
               >
-                {cfg.text}
+                {activeBatchStatus === "Paused" ? "Tạm dừng" : cfg.text}
               </Tag>
               <Tag color={connected ? "success" : "error"}>
                 {connected ? "MQTT Connected" : "MQTT Disconnected"}
@@ -2828,7 +2882,7 @@ export default function OperatorMachineDetailPage() {
                             max={100}
                             style={{ width: "100%" }}
                             value={ruleDraft.fanLevelOn}
-                            addonBefore="Quạt bật %"
+                            addonBefore="Bật %"
                             onChange={(value) =>
                               setRuleDraft((prev) => ({
                                 ...prev,
@@ -2843,7 +2897,7 @@ export default function OperatorMachineDetailPage() {
                             max={100}
                             style={{ width: "100%" }}
                             value={ruleDraft.fanLevelOff}
-                            addonBefore="Quạt tắt %"
+                            addonBefore="Tắt %"
                             onChange={(value) =>
                               setRuleDraft((prev) => ({
                                 ...prev,
@@ -2896,7 +2950,7 @@ export default function OperatorMachineDetailPage() {
 
                       {dynamicFanRules.length === 0 ? (
                         <Empty
-                          description="Chưa có quy tắc cho quạt"
+                          description="Chưa có quy tắc"
                           image={Empty.PRESENTED_IMAGE_SIMPLE}
                         />
                       ) : (

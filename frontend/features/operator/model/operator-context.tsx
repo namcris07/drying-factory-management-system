@@ -7,7 +7,7 @@
 import { createContext, useContext, useState, useEffect, ReactNode, useRef } from 'react';
 import { useMemo } from 'react';
 import { Machine, Recipe, SensorState, ActuatorState } from '@/features/operator/model/machine-data';
-import { batchesApi, chambersApi, mqttApi, recipesApi } from '@/shared/lib/api';
+import { ApiBatch, batchesApi, chambersApi, mqttApi, recipesApi } from '@/shared/lib/api';
 
 export type OperatorContextType = {
   machines:     Machine[];
@@ -263,15 +263,7 @@ export function OperatorProvider({
         .padStart(2, '0')}`;
     };
 
-    const resolveProgressPercent = (batch: {
-      startedAt: string | null;
-      recipe:
-        | {
-            timeDurationEst?: number | null;
-            stages?: { durationMinutes: number }[];
-          }
-        | null;
-    }) => {
+    const resolveProgressPercent = (batch: ApiBatch) => {
       const start = batch.startedAt ? new Date(batch.startedAt) : null;
       if (!start || Number.isNaN(start.getTime())) return undefined;
 
@@ -288,8 +280,17 @@ export function OperatorProvider({
 
       if (!Number.isFinite(totalMinutes) || totalMinutes <= 0) return undefined;
 
-      const elapsedMinutes =
-        (Date.now() - start.getTime()) / (1000 * 60);
+      let elapsedMinutes = 0;
+      if (batch.batchStatus === "Paused" && batch.stageStartedAt) {
+        const stageStart = new Date(batch.stageStartedAt);
+        if (!Number.isNaN(stageStart.getTime())) {
+          elapsedMinutes = (stageStart.getTime() - start.getTime()) / (1000 * 60);
+        } else {
+          elapsedMinutes = (Date.now() - start.getTime()) / (1000 * 60);
+        }
+      } else {
+        elapsedMinutes = (Date.now() - start.getTime()) / (1000 * 60);
+      }
       const percent = Math.round((elapsedMinutes / totalMinutes) * 100);
       return Math.max(0, Math.min(100, percent));
     };

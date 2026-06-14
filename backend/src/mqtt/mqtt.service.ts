@@ -352,6 +352,59 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
           note,
         };
       }
+
+      if (mode === 'manual') {
+        const atomRules = await this.getDynamicFanRules();
+        const criticalRules = atomRules.filter(
+          (rule) => rule.enabled && rule.category === 'critical',
+        );
+
+        for (const rule of criticalRules) {
+          if (
+            this.normalizeFeedKey(rule.fanFeed) ===
+            this.normalizeFeedKey(normalizedFeed)
+          ) {
+            const sensorValue = this.findLatestFeedValue(rule.sensorFeed);
+            if (sensorValue !== null) {
+              const obs = this.sensorObservationAdapter.adapt(
+                rule.sensorFeed,
+                sensorValue,
+              );
+              const isSatisfied = this.atomRuleSpecification.isSatisfied(
+                rule as any,
+                obs,
+              );
+
+              if (isSatisfied) {
+                let isViolation = false;
+                const normFeed = this.normalizeFeedKey(normalizedFeed);
+                const userValNum = Number(value);
+
+                if (normFeed.includes('fan')) {
+                  isViolation = userValNum < rule.fanLevelOn;
+                } else {
+                  const targetNormalized = rule.fanLevelOn > 0 ? 1 : 0;
+                  const userNormalized = userValNum > 0 ? 1 : 0;
+                  isViolation = userNormalized !== targetNormalized;
+                }
+
+                if (isViolation) {
+                  const note = `Lệnh bị chặn (Quy tắc an toàn động cực hạn đang kích hoạt): Cảm biến ${rule.sensorFeed} (${sensorValue}) đang vượt ngưỡng. Thiết bị ${rule.fanFeed} phải duy trì ở trạng thái an toàn (${rule.fanLevelOn}%).`;
+                  this.logger.warn(
+                    `publishCommand bị chặn ở chế độ MANUAL (quy tắc an toàn động cực hạn): ${normalizedFeed} = ${value}`,
+                  );
+                  return {
+                    ok: false,
+                    topic,
+                    payload,
+                    note,
+                  };
+                }
+              }
+            }
+          }
+        }
+      }
     }
 
     const isLcdFeed =
@@ -1106,6 +1159,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
 
     if (metric === 'temperature') {
       const sensorFeedLabel = this.formatSensorFeedLabel(feed);
+      const inTransition = await this.isBatchInTransitionPeriod(deviceId);
 
       await this.handleMetricAlert({
         conditionKey: `temp_high:${deviceId ?? 'global'}:${this.normalizeFeedKey(feed)}`,
@@ -1114,6 +1168,8 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
         deviceId,
         alertType: 'error',
         alertMessage: `${deviceName}: Cảm biến ${sensorFeedLabel} vượt ngưỡng global (${thresholds.maxTempSafe}°C).`,
+        resolvePattern: 'vượt ngưỡng global',
+        sensorFeed: feed,
       });
 
       if (numericValue <= thresholds.maxTempSafe) {
@@ -1123,6 +1179,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       await this.handleMetricAlert({
         conditionKey: `temp_formula_high:${deviceId ?? 'global'}:${this.normalizeFeedKey(feed)}`,
         active:
+          !inTransition &&
           Number.isFinite(formulaThreshold.maxTemperature) &&
           numericValue >=
             (formulaThreshold.maxTemperature as number) +
@@ -1135,6 +1192,8 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
           formulaThreshold,
           sensorFeedLabel,
         ),
+        resolvePattern: 'vượt ngưỡng công thức',
+        sensorFeed: feed,
       });
 
       if (numericValue > thresholds.maxTempSafe) {
@@ -1184,6 +1243,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     if (metric === 'humidity') {
       const formulaHumidityMax = formulaThreshold.maxHumidity;
       const sensorFeedLabel = this.formatSensorFeedLabel(feed);
+      const inTransition = await this.isBatchInTransitionPeriod(deviceId);
 
       await this.handleMetricAlert({
         conditionKey: `hum_low:${deviceId ?? 'global'}:${this.normalizeFeedKey(feed)}`,
@@ -1192,6 +1252,8 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
         deviceId,
         alertType: 'warning',
         alertMessage: `${deviceName}: Cảm biến ${sensorFeedLabel} thấp hơn ngưỡng tối thiểu (${thresholds.minHumidity}%).`,
+        resolvePattern: 'thấp hơn ngưỡng tối thiểu',
+        sensorFeed: feed,
       });
 
       await this.handleMetricAlert({
@@ -1201,11 +1263,14 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
         deviceId,
         alertType: 'warning',
         alertMessage: `${deviceName}: Cảm biến ${sensorFeedLabel} vượt ngưỡng global (${thresholds.maxHumidity}%).`,
+        resolvePattern: 'vượt ngưỡng global',
+        sensorFeed: feed,
       });
 
       await this.handleMetricAlert({
         conditionKey: `hum_formula_high:${deviceId ?? 'global'}:${this.normalizeFeedKey(feed)}`,
         active:
+          !inTransition &&
           Number.isFinite(formulaHumidityMax) &&
           numericValue >=
             (formulaHumidityMax as number) +
@@ -1218,6 +1283,8 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
           formulaThreshold,
           sensorFeedLabel,
         ),
+        resolvePattern: 'vượt ngưỡng công thức',
+        sensorFeed: feed,
       });
 
       const hasDynamicRule =
@@ -1882,10 +1949,19 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
 
     if (atomRules.length === 0 && groupRules.length === 0) return;
 
+    // Lấy chế độ vận hành hiện tại từ SystemConfig
+    const mode = await this.modeControl.getCurrentMode();
+
     const matchedActions: ResolvedFanAction[] = [];
 
     for (const rule of atomRules) {
       if (!rule.enabled) continue;
+
+      // Trong chế độ MANUAL, chỉ cho phép các luật an toàn cực hạn (critical) chạy
+      if (mode === 'manual' && rule.category !== 'critical') {
+        continue;
+      }
+
       if (
         normalizePatternFeedKey(rule.sensorFeed) !== observation.normalizedFeed
       ) {
@@ -1913,25 +1989,41 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       });
     }
 
-    for (const group of groupRules) {
-      const isMatched = this.groupRuleSpecification.isSatisfied(
-        group as DynamicFanGroupRuleLike,
-        observation,
-        (sensorFeed) => this.findLatestFeedValue(sensorFeed),
-        (sensorFeed, numericValue) =>
-          this.detectMetric(sensorFeed) === 'temperature' &&
-          (this.isFaultTemperatureReading(numericValue) ||
-            this.isTemperatureFeedMarkedFaulty(sensorFeed)),
-      );
+    // Các rule tổ hợp (Group Rules) là các luật nghiệp vụ điều khiển sấy, chỉ chạy ở chế độ AUTO
+    if (mode === 'auto') {
+      for (const group of groupRules) {
+        const isMatched = this.groupRuleSpecification.isSatisfied(
+          group as DynamicFanGroupRuleLike,
+          observation,
+          (sensorFeed) => this.findLatestFeedValue(sensorFeed),
+          (sensorFeed, numericValue) =>
+            this.detectMetric(sensorFeed) === 'temperature' &&
+            (this.isFaultTemperatureReading(numericValue) ||
+              this.isTemperatureFeedMarkedFaulty(sensorFeed)),
+        );
 
-      for (const candidate of this.groupRuleSpecification.toCandidates(
-        group as DynamicFanGroupRuleLike,
-        isMatched,
-      )) {
-        const stateKey = this.normalizeFeedKey(candidate.fanFeed);
-        const previous = this.fanRuleResolutionState.get(stateKey);
+        for (const candidate of this.groupRuleSpecification.toCandidates(
+          group as DynamicFanGroupRuleLike,
+          isMatched,
+        )) {
+          const stateKey = this.normalizeFeedKey(candidate.fanFeed);
+          const previous = this.fanRuleResolutionState.get(stateKey);
 
-        if (isMatched) {
+          if (isMatched) {
+            matchedActions.push({
+              ...candidate,
+              targetLevel: this.normalizeDynamicActuatorTargetLevel(
+                candidate.fanFeed,
+                candidate.targetLevel,
+              ),
+            });
+            continue;
+          }
+
+          if (previous?.ruleId !== group.id || previous.value <= 0) {
+            continue;
+          }
+
           matchedActions.push({
             ...candidate,
             targetLevel: this.normalizeDynamicActuatorTargetLevel(
@@ -1939,20 +2031,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
               candidate.targetLevel,
             ),
           });
-          continue;
         }
-
-        if (previous?.ruleId !== group.id || previous.value <= 0) {
-          continue;
-        }
-
-        matchedActions.push({
-          ...candidate,
-          targetLevel: this.normalizeDynamicActuatorTargetLevel(
-            candidate.fanFeed,
-            candidate.targetLevel,
-          ),
-        });
       }
     }
 
@@ -2471,6 +2550,90 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  private async resolveSensorAlerts(
+    deviceId: number | null,
+    feed: string,
+    pattern: string,
+  ) {
+    const sensorFeedLabel = this.formatSensorFeedLabel(feed);
+    const openAlerts = await this.prisma.alert.findMany({
+      where: {
+        deviceID: deviceId,
+        alertStatus: { in: ['pending', 'acknowledged'] },
+        AND: [
+          {
+            alertMessage: {
+              contains: `Cảm biến ${sensorFeedLabel}`,
+              mode: 'insensitive',
+            },
+          },
+          { alertMessage: { contains: pattern, mode: 'insensitive' } },
+        ],
+      },
+      select: { alertID: true },
+    });
+
+    if (openAlerts.length === 0) return;
+
+    await this.prisma.$transaction(
+      openAlerts.flatMap((alert) => [
+        this.prisma.alert.update({
+          where: { alertID: alert.alertID },
+          data: { alertStatus: 'resolved' },
+        }),
+        this.prisma.alertResolution.create({
+          data: {
+            alertID: alert.alertID,
+            resolveStatus: 'auto_resolved',
+            resolveNote: `Tự động đóng khi thông số cảm biến quay lại mức chuẩn công thức/an toàn (${pattern}).`,
+            resolveTime: new Date(),
+          },
+        }),
+      ]),
+    );
+
+    this.logger.log(
+      `Đã tự động đóng ${openAlerts.length} cảnh báo cho cảm biến ${sensorFeedLabel} (pattern: ${pattern})`,
+    );
+  }
+
+  private async isBatchInTransitionPeriod(
+    deviceId: number | null,
+  ): Promise<boolean> {
+    try {
+      const activeBatch = await this.prisma.batch.findFirst({
+        where: {
+          ...(deviceId ? { deviceID: deviceId } : {}),
+          batchStatus: {
+            in: ['Running', 'InProgress', 'Active', 'Processing'],
+          },
+        },
+        select: {
+          stageStartedAt: true,
+          startedAt: true,
+        },
+      });
+
+      if (!activeBatch) return false;
+
+      const stageStart = activeBatch.stageStartedAt ?? activeBatch.startedAt;
+      if (!stageStart) return false;
+
+      const configRow = await this.prisma.systemConfig.findUnique({
+        where: { configKey: 'stabilizationPeriodMinutes' },
+        select: { configValue: true },
+      });
+      const periodMinutes = configRow?.configValue
+        ? Number(configRow.configValue)
+        : 15;
+
+      const elapsedMs = Date.now() - new Date(stageStart).getTime();
+      return elapsedMs < periodMinutes * 60 * 1000;
+    } catch {
+      return false;
+    }
+  }
+
   private async handleMetricAlert(params: {
     conditionKey: string;
     active: boolean;
@@ -2478,6 +2641,8 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     deviceId: number | null;
     alertType: string;
     alertMessage: string;
+    resolvePattern?: string;
+    sensorFeed?: string;
   }) {
     const {
       conditionKey,
@@ -2486,6 +2651,8 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       deviceId,
       alertType,
       alertMessage,
+      resolvePattern,
+      sensorFeed,
     } = params;
 
     const now = Date.now();
@@ -2493,7 +2660,11 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     if (!active) {
       this.metricOutOfRangeSince.delete(conditionKey);
       this.clearPendingAlertTimer(conditionKey);
-      await this.resolveOpenAlertsByMessage(deviceId, alertMessage);
+      if (resolvePattern && sensorFeed) {
+        await this.resolveSensorAlerts(deviceId, sensorFeed, resolvePattern);
+      } else {
+        await this.resolveOpenAlertsByMessage(deviceId, alertMessage);
+      }
       return;
     }
 

@@ -33,7 +33,7 @@ describe('MqttService device state', () => {
     };
 
     const modeControl = {
-      getCurrentMode: jest.fn().mockResolvedValue('manual'),
+      getCurrentMode: jest.fn().mockResolvedValue('auto'),
     };
 
     const service = new MqttService(
@@ -233,6 +233,54 @@ describe('MqttService device state', () => {
     );
     expect((service as any).feedState.get('drytech.m-a1-pump')).toEqual(
       expect.objectContaining({ value: 0, source: 'server-command' }),
+    );
+  });
+
+  it('blocks publishCommand in manual mode if it violates active critical rule', async () => {
+    const { service, prisma } = createService();
+
+    (service as any).modeControl.getCurrentMode = jest
+      .fn()
+      .mockResolvedValue('manual');
+
+    prisma.device.findUnique.mockResolvedValue({
+      deviceID: 7,
+      mqttTopicCmd: 'drytech.m-a1-fan_level',
+      mqttTopicSensor: 'drytech.m-a1-temp',
+    });
+
+    (service as any).isPublishFeedAllowed = jest.fn().mockResolvedValue(true);
+
+    (service as any).getDynamicFanRules = jest.fn().mockResolvedValue([
+      {
+        id: 'RULE-CRITICAL-1',
+        enabled: true,
+        category: 'critical',
+        sensorFeed: 'drytech.m-a1-temp',
+        comparator: 'gte',
+        threshold: 60,
+        fanFeed: 'drytech.m-a1-fan_level',
+        fanLevelOn: 100,
+        fanLevelOff: 0,
+        priority: 1000,
+        cooldownMs: 5000,
+      },
+    ]);
+
+    (service as any).feedState.set('drytech.m-a1-temp', {
+      feed: 'drytech.m-a1-temp',
+      value: 75,
+    });
+
+    const result = await service.publishCommand(
+      'drytech.m-a1-fan_level',
+      0,
+      false,
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.note).toContain(
+      'Lệnh bị chặn (Quy tắc an toàn động cực hạn đang kích hoạt)',
     );
   });
 });

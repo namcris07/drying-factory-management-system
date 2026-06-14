@@ -461,6 +461,7 @@ export type ApiBatch = {
     startedAt: string | null;
     endedAt: string | null;
   }[];
+  alerts?: ApiAlert[];
 };
 
 export type ApiPagination = {
@@ -507,6 +508,11 @@ export const batchesApi = {
     request<ApiBatch>(`/batches/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),
+    }),
+  applyStageSetpoint: (id: number, userID?: number) =>
+    request<{ ok: boolean; note?: string }>(`/batches/${id}/apply-stage-setpoint`, {
+      method: "POST",
+      body: JSON.stringify({ userID }),
     }),
   remove: (id: number) => request<void>(`/batches/${id}`, { method: "DELETE" }),
 };

@@ -99,7 +99,11 @@ export class BatchesService implements OnModuleInit, OnModuleDestroy {
 
     const where =
       status === 'running'
-        ? { batchStatus: { equals: 'Running', mode: 'insensitive' as const } }
+        ? {
+            batchStatus: {
+              in: ['Running', 'Paused'],
+            },
+          }
         : status === 'completed'
           ? {
               OR: [
@@ -449,8 +453,33 @@ export class BatchesService implements OnModuleInit, OnModuleDestroy {
           mode: 'insensitive',
         },
       },
-      select: { alertID: true },
+      select: { alertID: true, alertTime: true },
     });
+
+    let pauseDurationMs = 0;
+    if (pending && pending.alertTime) {
+      const now = new Date();
+      pauseDurationMs = now.getTime() - pending.alertTime.getTime();
+    }
+
+    const isPausedManual =
+      batch.batchStatus === 'Paused' &&
+      (batch.operationMode ?? '').toLowerCase() === 'manual';
+
+    if (isPausedManual) {
+      const updatedStartedAt = batch.startedAt
+        ? new Date(batch.startedAt.getTime() + pauseDurationMs)
+        : new Date();
+
+      await this.prisma.batch.update({
+        where: { batchesID: batchId },
+        data: {
+          batchStatus: 'Running',
+          startedAt: updatedStartedAt,
+          stageStartedAt: new Date(),
+        },
+      });
+    }
 
     if (pending) {
       await this.prisma.$transaction([
@@ -463,11 +492,15 @@ export class BatchesService implements OnModuleInit, OnModuleDestroy {
             alertID: pending.alertID,
             userID: userID ?? undefined,
             resolveStatus: 'applied',
-            resolveNote: 'Áp dụng setpoint bởi operator',
+            resolveNote: 'Áp dụng setpoint và tiếp tục mẻ sấy bởi operator',
             resolveTime: new Date(),
           },
         }),
       ]);
+    }
+
+    if (isPausedManual) {
+      void this.synchronizeBatchProgress(batchId);
     }
 
     return { ok: true, temp: tempResult, hum: humResult };
@@ -552,13 +585,8 @@ export class BatchesService implements OnModuleInit, OnModuleDestroy {
 
     if (!progress.activeStage) return;
 
-    const currentStageStartedAt = batch.stageStartedAt
-      ? batch.stageStartedAt.getTime()
-      : null;
-    const nextStageStartedAt = progress.activeStageStartedAt.getTime();
     const isStageChanged =
-      batch.currentStage !== progress.activeStage.stageOrder ||
-      currentStageStartedAt !== nextStageStartedAt;
+      batch.currentStage !== progress.activeStage.stageOrder;
 
     await this.prisma.batch.update({
       where: { batchesID: batchId },
@@ -577,6 +605,18 @@ export class BatchesService implements OnModuleInit, OnModuleDestroy {
         deviceName: batch.device?.deviceName ?? null,
         operationMode: batch.operationMode,
       });
+
+      if ((batch.operationMode ?? '').toLowerCase() === 'manual') {
+        await this.prisma.batch.update({
+          where: { batchesID: batchId },
+          data: { batchStatus: 'Paused' },
+        });
+        this.clearStageTimer(batchId);
+        this.logger.log(
+          `Batch ${batchId} chuyển sang giai đoạn mới ở chế độ Manual. Tạm dừng để chờ operator thiết lập.`,
+        );
+        return;
+      }
     }
 
     this.scheduleNextStage(batchId, progress.remainingToNextMs);
