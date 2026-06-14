@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { ChambersController } from './chambers.controller';
 import { ChambersService } from './chambers.service';
 
@@ -11,6 +11,9 @@ describe('ChambersService', () => {
         create: jest.fn(),
         update: jest.fn(),
         delete: jest.fn(),
+      },
+      batch: {
+        findFirst: jest.fn(),
       },
       sensorChannel: {
         findMany: jest.fn().mockResolvedValue([]),
@@ -266,6 +269,7 @@ describe('ChambersService', () => {
       mqttTopicSensor: null,
       metaData: null,
     });
+    (prisma.batch.findFirst as jest.Mock).mockResolvedValue(null);
     prisma.device.update.mockResolvedValue({});
 
     await expect(service.remove(8)).resolves.toEqual({ ok: true });
@@ -273,6 +277,27 @@ describe('ChambersService', () => {
       where: { deviceID: 8 },
       data: { deviceStatus: 'Deleted' },
     });
+  });
+
+  it('remove throws BadRequestException if chamber has a running batch', async () => {
+    const { service, prisma } = createService();
+
+    prisma.device.findUnique.mockResolvedValue({
+      deviceID: 8,
+      deviceName: 'Chamber 8',
+      deviceStatus: 'Active',
+      zoneID: null,
+      zone: null,
+      mqttTopicSensor: null,
+      metaData: null,
+    });
+    (prisma.batch.findFirst as jest.Mock).mockResolvedValue({
+      batchesID: 123,
+      batchStatus: 'Running',
+    });
+
+    await expect(service.remove(8)).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.device.update).not.toHaveBeenCalled();
   });
 
   it('throws when creating with duplicate feed keys in same chamber', async () => {

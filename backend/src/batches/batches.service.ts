@@ -376,6 +376,103 @@ export class BatchesService implements OnModuleInit, OnModuleDestroy {
     return this.prisma.batch.delete({ where: { batchesID: id } });
   }
 
+  async applyStageSetpoints(batchId: number, userID?: number) {
+    const batch = await this.prisma.batch.findUnique({
+      where: { batchesID: batchId },
+      include: {
+        recipe: { include: { stages: { orderBy: { stageOrder: 'asc' } } } },
+        device: true,
+      },
+    });
+
+    if (!batch) throw new NotFoundException(`Batch ${batchId} not found`);
+
+    if (!batch.currentStage) {
+      throw new BadRequestException('Batch không có currentStage hợp lệ.');
+    }
+
+    const stage = (batch.recipe?.stages || []).find(
+      (s) => s.stageOrder === batch.currentStage,
+    );
+
+    if (!stage) {
+      throw new BadRequestException(
+        'Không tìm thấy RecipeStage ứng với currentStage.',
+      );
+    }
+
+    const tempFeed = await this.getConfigValue('temperatureSetpointFeed');
+    const humFeed = await this.getConfigValue('humiditySetpointFeed');
+
+    if (!tempFeed || !humFeed) {
+      throw new BadRequestException(
+        'temperatureSetpointFeed/humiditySetpointFeed chưa được cấu hình.',
+      );
+    }
+
+    const [tempResult, humResult] = await Promise.all([
+      this.mqttService.publishCommand(
+        tempFeed,
+        stage.temperatureSetpoint,
+        true,
+      ),
+      this.mqttService.publishCommand(humFeed, stage.humiditySetpoint, true),
+    ]);
+
+    if (!tempResult.ok || !humResult.ok) {
+      const note = [tempResult.note, humResult.note]
+        .filter(Boolean)
+        .join(' | ');
+      // create an error alert if publish fails
+      await this.prisma.alert.create({
+        data: {
+          alertType: 'error',
+          alertStatus: 'pending',
+          alertTime: new Date(),
+          deviceID: batch.device?.deviceID ?? batch.deviceID,
+          batchesID: batchId,
+          alertMessage: `${batch.device?.deviceName || 'Thiết bị'}: Không gửi được setpoint khi operator áp dụng giai đoạn ${stage.stageOrder}. ${note}`,
+        },
+      });
+
+      return { ok: false, note };
+    }
+
+    // If successful, resolve any pending info alert for this batch/stage
+    const pending = await this.prisma.alert.findFirst({
+      where: {
+        batchesID: batchId,
+        alertType: 'info',
+        alertStatus: 'pending',
+        alertMessage: {
+          contains: `giai đoạn ${stage.stageOrder}`,
+          mode: 'insensitive',
+        },
+      },
+      select: { alertID: true },
+    });
+
+    if (pending) {
+      await this.prisma.$transaction([
+        this.prisma.alert.update({
+          where: { alertID: pending.alertID },
+          data: { alertStatus: 'resolved' },
+        }),
+        this.prisma.alertResolution.create({
+          data: {
+            alertID: pending.alertID,
+            userID: userID ?? undefined,
+            resolveStatus: 'applied',
+            resolveNote: 'Áp dụng setpoint bởi operator',
+            resolveTime: new Date(),
+          },
+        }),
+      ]);
+    }
+
+    return { ok: true, temp: tempResult, hum: humResult };
+  }
+
   private async recoverRunningBatches() {
     const runningBatches = await this.prisma.batch.findMany({
       where: {
@@ -478,6 +575,7 @@ export class BatchesService implements OnModuleInit, OnModuleDestroy {
         recipeName: batch.recipe.recipeName,
         deviceId: batch.device?.deviceID ?? batch.deviceID,
         deviceName: batch.device?.deviceName ?? null,
+        operationMode: batch.operationMode,
       });
     }
 
@@ -561,6 +659,7 @@ export class BatchesService implements OnModuleInit, OnModuleDestroy {
     recipeName: string | null;
     deviceId: number | null;
     deviceName: string | null;
+    operationMode?: string | null;
   }) {
     const tempFeed = await this.getConfigValue('temperatureSetpointFeed');
     const humFeed = await this.getConfigValue('humiditySetpointFeed');
@@ -569,6 +668,37 @@ export class BatchesService implements OnModuleInit, OnModuleDestroy {
       this.logger.warn(
         `Batch ${params.batchId}: Bo qua publish setpoint MQTT vi chua cau hinh temperatureSetpointFeed/humiditySetpointFeed.`,
       );
+      return;
+    }
+
+    // If batch is in manual mode, create a pending operator alert
+    if ((params.operationMode ?? '').toLowerCase() === 'manual') {
+      const dup = await this.prisma.alert.findFirst({
+        where: {
+          batchesID: params.batchId,
+          alertType: 'info',
+          alertStatus: 'pending',
+          alertMessage: {
+            contains: `giai đoạn ${params.stage.stageOrder}`,
+            mode: 'insensitive',
+          },
+        },
+        select: { alertID: true },
+      });
+
+      if (dup) return;
+
+      await this.prisma.alert.create({
+        data: {
+          alertType: 'info',
+          alertStatus: 'pending',
+          alertTime: new Date(),
+          deviceID: params.deviceId,
+          batchesID: params.batchId,
+          alertMessage: `${params.deviceName || 'Thiết bị'}: Giai đoạn ${params.stage.stageOrder} bắt đầu — đề xuất setpoint T=${params.stage.temperatureSetpoint}, H=${params.stage.humiditySetpoint}. Vui lòng nhấn 'Áp dụng setpoint' nếu muốn gửi tới thiết bị.`,
+        },
+      });
+
       return;
     }
 

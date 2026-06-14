@@ -1,196 +1,199 @@
 # DryTech - Drying Factory Management System
 
 Hệ thống quản lý vận hành nhà máy sấy công nghiệp, gồm:
-- Frontend: Next.js App Router cho các vai trò Admin, Manager, Operator.
-- Backend: NestJS + Prisma + PostgreSQL, có tích hợp MQTT (Adafruit IO) để nhận dữ liệu cảm biến.
+- **Frontend**: Next.js App Router (React 19, Ant Design v5, Radix UI) cho các vai trò Admin, Manager, Operator.
+- **Backend**: NestJS 11 + Prisma + PostgreSQL, tích hợp MQTT (Adafruit IO) để kết nối và nhận dữ liệu từ cảm biến thực tế/mô phỏng.
 
 Mục tiêu chính của dự án:
-- Quản lý người dùng, khu vực, thiết bị IoT.
-- Quản lý công thức sấy, mẻ sấy, cảnh báo.
-- Giám sát dữ liệu cảm biến và cấu hình ngưỡng hệ thống.
+- Quản lý người dùng (Users), khu vực (Zones), buồng sấy (Chambers), thiết bị (Devices) và khách thuê (Tenants).
+- Quản lý công thức sấy (Recipes), mẻ sấy (Batches), lịch sử vận hành và cảnh báo (Alerts).
+- Giám sát dữ liệu cảm biến thời gian thực, điều khiển thiết bị (quạt, đèn, màn hình LCD) và cấu hình ngưỡng hệ thống.
+- Báo cáo thống kê, phân tích dữ liệu hiệu suất thiết bị (MTBF, xu hướng hoạt động).
 
-## 1. Kiến trúc hệ thống
+---
+
+## 1. Kiến trúc hệ thống và Cổng kết nối
 
 ### Thành phần chính
-- `frontend` chạy mặc định tại `http://localhost:3001` (`npm run dev` dùng cổng 3001).
-- `backend` chạy mặc định tại `http://localhost:3000`.
-- Backend set global prefix `api` => base API là `http://localhost:3000/api`.
+- **Frontend**: Chạy tại [http://localhost:4000](http://localhost:4000) (cấu hình trong `frontend/package.json` với script `"dev": "next dev -p 4000"`).
+- **Backend**: Chạy tại [http://localhost:4001](http://localhost:4001) (cấu hình trong `backend/.env` với `PORT=4001`).
+- Backend thiết lập Global Prefix là `api` => API endpoint cơ sở là `http://localhost:4001/api`.
 
-Frontend gọi backend qua biến môi trường:
-- `NEXT_PUBLIC_API_URL` (mặc định fallback: `http://localhost:3000/api` trong `frontend/shared/lib/api.ts`).
-
-Backend cho phép CORS từ:
-- `FRONTEND_URL` (mặc định fallback: `http://localhost:3001` trong `backend/src/main.ts`).
-
-### Luồng request (text diagram)
+### Luồng gọi API & Dữ liệu
 ```text
-[Browser]
-   |
-   | 1) User thao tác UI
-   v
-[Next.js Frontend (localhost:3001)]
-   |
-   | 2) fetch() qua shared/lib/api.ts
-   |    BASE_URL = NEXT_PUBLIC_API_URL || http://localhost:3000/api
-   v
-[NestJS Backend (localhost:3000/api)]
-   |
-   | 3) Controller -> Service -> PrismaService
-   v
-[PostgreSQL]
+[Trình duyệt Người dùng]
+       |
+       | 1) Thao tác UI (Admin, Manager, Operator)
+       v
+[Next.js Frontend (localhost:4000)]
+       |
+       | 2) Gọi request qua shared/lib/api.ts
+       |    BASE_URL = NEXT_PUBLIC_API_URL || http://localhost:4001/api
+       v
+[NestJS Backend (localhost:4001/api)]
+       |
+       | 3) Controller -> Service -> PrismaService (PostgreSQL)
+       v
+[PostgreSQL Database]
 
-Song song (nếu bật MQTT):
-[Adafruit IO MQTT] -> [NestJS MqttController] -> [SensorService] -> [SensorDataLog]
+Song song (kết nối IoT):
+[Adafruit IO MQTT Broker] <---> [NestJS MqttService] <---> [PostgreSQL (SensorDataLog / Alerts)]
 ```
 
-## 2. Cấu trúc project
+---
+
+## 2. Cấu trúc thư mục dự án
 
 ```text
 drying-factory-management-system/
 |-- backend/
 |   |-- prisma/
-|   |   |-- migrations/
-|   |   |-- schema.prisma
-|   |   `-- seed.ts
+|   |   |-- schema.prisma        # Schema cơ sở dữ liệu (PostgreSQL)
+|   |   `-- seed.ts              # Script khởi tạo dữ liệu mẫu (Users, Zones, Chambers, v.v.)
 |   |-- src/
-|   |   |-- auth/ users/ zones/ devices/ recipes/
-|   |   |-- batches/ alerts/ sensor-data/ system-config/
-|   |   |-- mqtt/ sensor/ prisma/
-|   |   `-- main.ts
+|   |   |-- auth/                # Xác thực & Phân quyền (Login)
+|   |   |-- users/               # Quản lý người dùng
+|   |   |-- zones/               # Quản lý khu vực nhà máy
+|   |   |-- chambers/            # Quản lý buồng sấy (Chambers)
+|   |   |-- devices/             # Quản lý thiết bị (cảm biến, cơ cấu chấp hành)
+|   |   |-- recipes/             # Quản lý công thức sấy (nhiệt độ/độ ẩm setpoint)
+|   |   |-- batches/             # Quản lý mẻ sấy (trạng thái, chế độ điều khiển)
+|   |   |-- alerts/              # Quản lý cảnh báo lỗi & xác nhận sự cố
+|   |   |-- sensor-data/         # API truy vấn nhật ký đo đạc của cảm biến
+|   |   |-- system-config/       # API quản lý cấu hình hệ thống
+|   |   |-- analytics/           # API phân tích (tỷ lệ thành công mẻ sấy, MTBF)
+|   |   |-- mqtt/                # Module MQTT kết nối Adafruit IO
+|   |   `-- main.ts              # Khởi động ứng dụng NestJS
 |   |-- .env.example
-|   |-- Dockerfile
 |   `-- package.json
 |-- frontend/
 |   |-- app/
-|   |   |-- (auth)/login
-|   |   |-- (admin)/admin/{users,zones,devices,thresholds,logs}
-|   |   |-- (manager)/{manager,recipes,batches,reports,ai,ui}
-|   |   `-- (operator)/operator/{realtime,adafruit,alerts}
+|   |   |-- (auth)/login/        # Trang đăng nhập
+|   |   |-- (admin)/admin/       # Quản lý Users, Zones, Chambers, Devices, Thresholds, Logs
+|   |   |-- (manager)/           # Trang Manager (Dashboard, Recipes, Batches)
+|   |   `-- (operator)/operator/ # Trang Operator (Dashboard điều khiển, Realtime, Alerts)
 |   |-- features/
-|   |   |-- admin/ manager/ operator/ auth/ notifications/
+|   |   |-- admin/               # Feature-based logic của Admin
+|   |   |-- manager/             # Feature-based logic của Manager
+|   |   |-- operator/            # Feature-based logic của Operator (điều khiển thiết bị, IoT)
+|   |   |-- auth/                # Login state
+|   |   `-- notifications/       # Trung tâm thông báo đẩy
 |   |-- shared/
-|   |   |-- lib/api.ts
-|   |   |-- auth/session.ts
-|   |   `-- ui/
+|   |   |-- lib/api.ts           # Axios/Fetch client gọi Backend
+|   |   `-- auth/                # Session guard & vai trò người dùng
 |   |-- Dockerfile
 |   `-- package.json
 `-- README.md
 ```
 
-### Giải thích các folder chính
-- `backend/src/*`: mô-đun nghiệp vụ theo domain (users, devices, recipes, batches, alerts...).
-- `backend/prisma/*`: schema DB, migrations, seed data.
-- `frontend/app/*`: route theo App Router + route group theo vai trò.
-- `frontend/features/*`: UI/business logic theo tính năng.
-- `frontend/shared/*`: API client, auth session, providers, UI dùng chung.
+---
 
-## 3. Biến môi trường quan trọng
+## 3. Cấu hình Biến môi trường (Environment Variables)
 
 ### Backend (`backend/.env`)
-Từ `backend/.env.example` và code `backend/src/main.ts`, `backend/src/prisma/prisma.service.ts`:
-
+Tạo từ tệp mẫu `backend/.env.example` và tùy chỉnh:
 ```env
-PORT=3000
-DATABASE_URL=postgresql://postgres:yourpassword@localhost:5432/dadn_db
+PORT=4001
+FRONTEND_URL=http://localhost:4000
 
-ADAFRUIT_IO_USERNAME=your_adafruit_username
-ADAFRUIT_IO_KEY=your_adafruit_aio_key
+# PostgreSQL Connection String
+DATABASE_URL="postgresql://postgres:yourpassword@localhost:5432/dadn_db?schema=public"
 
-# Khuyến nghị thêm (được code hỗ trợ fallback nếu thiếu)
-FRONTEND_URL=http://localhost:3001
+# Cấu hình Adafruit IO MQTT (Nếu để trống hoặc placeholder sẽ tạm tắt kết nối MQTT và log cảnh báo)
+ADAFRUIT_IO_USERNAME=your_username
+ADAFRUIT_IO_KEY=your_active_aio_key
+ADAFRUIT_IO_BROKER_URL=mqtt://io.adafruit.com:1883
+ADAFRUIT_IO_SUBSCRIBE_FEEDS=BBC_LED,BBC_TEMP,Lux,fan_level,Humidity,lcd_text,mode_state
 ```
-
-Lưu ý:
-- Nếu `ADAFRUIT_IO_USERNAME`/`ADAFRUIT_IO_KEY` vẫn để placeholder thì MQTT bị tắt.
 
 ### Frontend (`frontend/.env.local`)
-Từ `frontend/shared/lib/api.ts` và `frontend/features/operator/adafruit/config/adafruit-config.ts`:
-
+Tạo tại thư mục `frontend/` để định cấu hình cho ứng dụng Next.js:
 ```env
-NEXT_PUBLIC_API_URL=http://localhost:3000/api
-NEXT_PUBLIC_AIO_USERNAME=your_adafruit_username
-NEXT_PUBLIC_AIO_KEY=your_adafruit_aio_key
+NEXT_PUBLIC_API_URL=http://localhost:4001/api
+
+# Cấu hình Adafruit IO phục vụ tính năng điều khiển phía Client (nếu cần thiết)
+NEXT_PUBLIC_AIO_USERNAME=your_username
+NEXT_PUBLIC_AIO_KEY=your_active_aio_key
 ```
 
-## 4. Setup full project
+---
 
-Yêu cầu:
-- Node.js 20+ (Dockerfile đang dùng `node:20-alpine`).
-- PostgreSQL chạy sẵn và tạo DB (ví dụ `dadn_db`).
+## 4. Hướng dẫn thiết lập & Chạy dự án từ đầu
 
-### Bước 1: Cài dependencies
+### Yêu cầu hệ thống
+- **Node.js** phiên bản 20 trở lên.
+- **PostgreSQL** đang hoạt động (ví dụ qua Docker hoặc chạy trực tiếp trên máy).
+
+### Bước 1: Cài đặt thư viện (Dependencies)
+Mở 2 cửa sổ Terminal song song:
 ```bash
-# Terminal 1
+# Terminal 1: Cài đặt Backend
 cd backend
 npm install
 
-# Terminal 2
+# Terminal 2: Cài đặt Frontend
 cd frontend
 npm install
 ```
 
-### Bước 2: Cấu hình môi trường
-- Backend: tạo `backend/.env` từ `backend/.env.example`, cập nhật `DATABASE_URL`.
-- Frontend: tạo `frontend/.env.local` với `NEXT_PUBLIC_API_URL`.
-
-### Bước 3: Khởi tạo database (Prisma)
+### Bước 2: Thiết lập Database & Dữ liệu mẫu (Prisma)
+Tại Terminal của Backend, chạy các lệnh sau để khởi chạy cấu trúc bảng và nạp dữ liệu:
 ```bash
 cd backend
 
-# Generate Prisma client
+# Khởi tạo Prisma Client
 npm run prisma:generate
 
-# Chạy migration dev (nếu môi trường local)
+# Tiến hành migrate cấu trúc bảng vào PostgreSQL (yêu cầu tạo sẵn DB ví dụ `dadn_db` trước)
 npx prisma migrate dev
 
-# Seed dữ liệu mẫu
+# Nạp dữ liệu ban đầu (Seed data)
 npx prisma db seed
 ```
 
-### Bước 4: Chạy đồng thời backend + frontend
+### Bước 3: Chạy ứng dụng ở chế độ Phát triển (Dev Mode)
+Chạy đồng thời cả 2 dịch vụ để bắt đầu làm việc:
 ```bash
-# Terminal backend
+# Ở Terminal Backend
 cd backend
 npm run start:dev
 
-# Terminal frontend
+# Ở Terminal Frontend
 cd frontend
 npm run dev
 ```
 
-Truy cập:
-- Frontend: `http://localhost:3001`
-- Backend API base: `http://localhost:3000/api`
+Truy cập hệ thống:
+- **Giao diện người dùng**: [http://localhost:4000](http://localhost:4000)
+- **API Endpoint**: [http://localhost:4001/api](http://localhost:4001/api)
 
-## 5. Tài khoản mẫu (seed)
+---
 
-Trong `backend/prisma/seed.ts` có sẵn demo account:
-- `admin@drytech.io / admin123` (Admin)
-- `manager@drytech.io / 123456` (Manager)
-- `op_a@drytech.io / op123` (Operator)
+## 5. Tài khoản dùng thử (Seed Accounts)
 
-## 6. TEAM RULE (BẮT BUỘC)
+Mật khẩu mặc định sau khi chạy seed là:
+- **Quản trị viên (Admin)**: `admin@drytech.io` / mật khẩu: `admin123`
+- **Quản lý nhà máy (Manager)**: `manager@drytech.io` / mật khẩu: `123456`
+- **Vận hành viên (Operator)**: `op_a@drytech.io` / mật khẩu: `op123`
 
-Trước khi tạo Pull Request, bắt buộc pass toàn bộ:
+---
 
-- `npm run build` ✅
-- `npm run test` ✅
-- `npm run lint` ✅
-- `npm run test:cov` ✅
+## 6. Quy định chất lượng mã nguồn (Team Rule)
 
-Nếu chưa pass đầy đủ, KHÔNG được tạo PR.
+Trước khi tạo Pull Request (PR) hoặc đẩy mã nguồn lên nhánh chính, bạn **bắt buộc** phải chạy thử và đảm bảo vượt qua (pass) các bài kiểm tra sau:
 
-Gợi ý chạy cho cả 2 phần:
 ```bash
-# Backend
+# Kiểm tra phía Backend
 cd backend
-npm run build && npm run test && npm run lint && npm run test:cov
+npm run build && npm run test && npm run lint
 
-# Frontend
+# Kiểm tra phía Frontend
 cd frontend
-npm run build && npm run test && npm run lint && npm run test:cov
+npm run build && npm run test && npm run lint
 ```
 
-## 7. Tài liệu chi tiết từng phần
-- Frontend chi tiết: xem `frontend/README.md`
-- Backend chi tiết: xem `backend/README.md`
+---
+
+## 7. Tài liệu chi tiết của từng phần
+- **Frontend chi tiết**: Xem [frontend/README.md](file:///d:/Assignment/DADN-HTTT/drying-factory-management-system/frontend/README.md)
+- **Backend chi tiết**: Xem [backend/README.md](file:///d:/Assignment/DADN-HTTT/drying-factory-management-system/backend/README.md)

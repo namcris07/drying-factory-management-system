@@ -44,6 +44,14 @@ export class BatchesController {
     return this.batchesService.update(id, dto);
   }
 
+  @Post(':id/apply-stage-setpoint')
+  applyStageSetpoint(
+    @Param('id', ParseIntPipe) id: number,
+    @Body('userID') userID?: number,
+  ) {
+    return this.batchesService.applyStageSetpoints(id, userID);
+  }
+
   @Delete(':id')
   remove(@Param('id', ParseIntPipe) id: number) {
     return this.batchesService.remove(id);

@@ -77,10 +77,10 @@ describe('mqtt-logic.util', () => {
       expect(snapshot.phase).toBe('sensor');
       expect(snapshot.line1).toContain('T:45.0C');
       expect(snapshot.line1).toContain('H:50.0%');
-      expect(snapshot.line2).toBe('Door:CLOSE');
+      expect(snapshot.line2).toBe('Door:DONG');
     });
 
-    it('returns operator message view in manual mode during message phase', () => {
+    it('returns operator message view in manual mode when message is set', () => {
       const snapshot = buildLcdSnapshot({
         operatingMode: 'manual',
         nowMs: 4000,
@@ -92,8 +92,41 @@ describe('mqtt-logic.util', () => {
       });
 
       expect(snapshot.phase).toBe('message');
-      expect(snapshot.line1).toContain('MSG:Batch A almost done');
-      expect(snapshot.line2).toBe('Manual control');
+      expect(snapshot.line1).toBe('Batch A almost done');
+      expect(snapshot.line2).toBe('');
+    });
+
+    it('returns sensor metrics in manual mode when no operator message is set', () => {
+      const snapshot = buildLcdSnapshot({
+        operatingMode: 'manual',
+        nowMs: 4000,
+        temperature: 45,
+        humidity: 50,
+        light: 250,
+        lightSensorThreshold: 90,
+        operatorMessage: '',
+      });
+
+      expect(snapshot.phase).toBe('sensor');
+      expect(snapshot.line1).toContain('T:45.0C');
+      expect(snapshot.line1).toContain('H:50.0%');
+      expect(snapshot.line2).toBe('Door:MO');
+    });
+
+    it('handles multiline operator messages', () => {
+      const snapshot = buildLcdSnapshot({
+        operatingMode: 'manual',
+        nowMs: 4000,
+        temperature: 45,
+        humidity: 50,
+        light: 50,
+        lightSensorThreshold: 90,
+        operatorMessage: 'Nhiệt độ TB: 45.0°C\nĐộ ẩm TB: 50.0%',
+      });
+
+      expect(snapshot.phase).toBe('message');
+      expect(snapshot.line1).toBe('Nhiệt độ TB: 45.0°C');
+      expect(snapshot.line2).toBe('Độ ẩm TB: 50.0%');
     });
   });
 });

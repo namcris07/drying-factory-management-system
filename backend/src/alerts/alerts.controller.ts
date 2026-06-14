@@ -16,7 +16,18 @@ export class AlertsController {
   constructor(private alertsService: AlertsService) {}
 
   @Get()
-  findAll(@Query('status') status?: string) {
+  findAll(
+    @Query('status') status?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    const parsedPage = page ? Number(page) : undefined;
+    const parsedPageSize = pageSize ? Number(pageSize) : undefined;
+
+    if (parsedPage !== undefined || parsedPageSize !== undefined) {
+      return this.alertsService.findAll(status, parsedPage, parsedPageSize);
+    }
+
     return this.alertsService.findAll(status);
   }
 

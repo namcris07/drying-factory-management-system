@@ -17,11 +17,24 @@ export class RecipesController {
   constructor(private recipesService: RecipesService) {}
 
   @Get()
-  findAll(@Query('includeInactive') includeInactive?: string) {
+  findAll(
+    @Query('includeInactive') includeInactive?: string,
+    @Query('status') status?: 'all' | 'active' | 'inactive',
+    @Query('search') search?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
     const showInactive = ['1', 'true', 'yes'].includes(
       (includeInactive ?? '').toLowerCase(),
     );
-    return this.recipesService.findAll(showInactive);
+
+    return this.recipesService.findAll({
+      includeInactive: showInactive,
+      status,
+      search,
+      page: page ? Number(page) : undefined,
+      pageSize: pageSize ? Number(pageSize) : undefined,
+    });
   }
 
   @Get(':id')

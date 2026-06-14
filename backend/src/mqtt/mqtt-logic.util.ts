@@ -103,22 +103,20 @@ export function buildLcdSnapshot(params: {
   lightSensorThreshold: number;
   operatorMessage: string;
 }): { line1: string; line2: string; phase: 'sensor' | 'message' } {
-  const isMessagePhase =
-    params.operatingMode === 'manual' && shouldShowManualMessage(params.nowMs);
-
-  if (isMessagePhase) {
-    const safeMessage = params.operatorMessage.trim() || 'No message';
+  // In manual mode, always show operator message if available
+  if (params.operatingMode === 'manual' && params.operatorMessage.trim()) {
+    const safeMessage = params.operatorMessage.trim();
     return {
-      line1: `MSG:${safeMessage}`,
-      line2: 'Manual control',
+      line1: safeMessage.split('\n')[0] || safeMessage,
+      line2: safeMessage.split('\n')[1] || '',
       phase: 'message',
     };
   }
 
   const doorStatus = Number.isFinite(params.light)
     ? params.light! > params.lightSensorThreshold
-      ? 'OPEN'
-      : 'CLOSE'
+      ? 'MO'
+      : 'DONG'
     : 'N/A';
 
   return {

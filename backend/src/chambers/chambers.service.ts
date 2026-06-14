@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { MqttService } from '../mqtt/mqtt.service';
@@ -129,6 +133,24 @@ export class ChambersService {
     }
 
     return normalized;
+  }
+
+  private async syncChannelIdSequences() {
+    await this.prisma.$executeRawUnsafe(`
+      SELECT setval(
+        pg_get_serial_sequence('"SensorChannels"', 'SensorChannelID'),
+        COALESCE((SELECT MAX("SensorChannelID") FROM "SensorChannels"), 0) + 1,
+        false
+      );
+    `);
+
+    await this.prisma.$executeRawUnsafe(`
+      SELECT setval(
+        pg_get_serial_sequence('"ActuatorChannels"', 'ActuatorChannelID'),
+        COALESCE((SELECT MAX("ActuatorChannelID") FROM "ActuatorChannels"), 0) + 1,
+        false
+      );
+    `);
   }
 
   private extractSensorsFromDevice(device: {
@@ -376,6 +398,8 @@ export class ChambersService {
       where: { deviceID: deviceId },
     });
 
+    await this.syncChannelIdSequences();
+
     if (sensors.length > 0) {
       await this.prisma.sensorChannel.createMany({
         data: sensors.map((sensor, index) => ({
@@ -549,6 +573,20 @@ export class ChambersService {
 
   async remove(id: number) {
     await this.findOne(id);
+
+    const runningBatch = await this.prisma.batch.findFirst({
+      where: {
+        deviceID: id,
+        batchStatus: 'Running',
+      },
+    });
+
+    if (runningBatch) {
+      throw new BadRequestException(
+        'Không thể xóa buồng sấy khi đang có lô sấy hoạt động.',
+      );
+    }
+
     await this.prisma.device.update({
       where: { deviceID: id },
       data: { deviceStatus: 'Deleted' },

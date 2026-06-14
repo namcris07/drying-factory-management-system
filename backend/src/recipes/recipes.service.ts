@@ -11,6 +11,32 @@ import { CreateRecipeDto } from './dto/create-recipe.dto';
 export class RecipesService {
   constructor(private prisma: PrismaService) {}
 
+  private buildRecipeWhere(params: {
+    includeInactive?: boolean;
+    status?: 'all' | 'active' | 'inactive';
+    search?: string;
+  }): Prisma.RecipeWhereInput {
+    const status = params.status ?? (params.includeInactive ? 'all' : 'active');
+    const search = params.search?.trim();
+
+    const where: Prisma.RecipeWhereInput = {};
+
+    if (status === 'active') {
+      where.isActive = true;
+    } else if (status === 'inactive') {
+      where.isActive = false;
+    }
+
+    if (search) {
+      where.OR = [
+        { recipeName: { contains: search, mode: 'insensitive' } },
+        { recipeFruits: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+
+    return where;
+  }
+
   private async syncRecipeIdSequence() {
     await this.prisma.$executeRawUnsafe(`
       SELECT setval(
@@ -118,9 +144,52 @@ export class RecipesService {
     return Math.max(1, Math.round(total || 0));
   }
 
-  async findAll(includeInactive = false) {
+  async findAll(
+    params: {
+      includeInactive?: boolean;
+      status?: 'all' | 'active' | 'inactive';
+      search?: string;
+      page?: number;
+      pageSize?: number;
+    } = {},
+  ) {
+    const where = this.buildRecipeWhere(params);
+    const page =
+      params.page !== undefined ? Math.max(1, Number(params.page)) : undefined;
+    const pageSize =
+      params.pageSize !== undefined
+        ? Math.min(100, Math.max(1, Number(params.pageSize)))
+        : undefined;
+
+    if (page && pageSize) {
+      const skip = (page - 1) * pageSize;
+
+      const [items, total] = await this.prisma.$transaction([
+        this.prisma.recipe.findMany({
+          where,
+          include: this.recipeInclude,
+          orderBy: { recipeID: 'asc' },
+          skip,
+          take: pageSize,
+        }),
+        this.prisma.recipe.count({ where }),
+      ]);
+
+      return {
+        items: items.map((row) =>
+          this.toRecipeResponse(row as Record<string, unknown>),
+        ),
+        pagination: {
+          page,
+          pageSize,
+          total,
+          totalPages: Math.max(1, Math.ceil(total / pageSize)),
+        },
+      };
+    }
+
     const rows = await this.prisma.recipe.findMany({
-      where: includeInactive ? undefined : ({ isActive: true } as never),
+      where,
       include: this.recipeInclude,
       orderBy: { recipeID: 'asc' },
     });

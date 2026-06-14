@@ -4,7 +4,7 @@
  * app/(manager)/recipes/page.tsx
  * Thư viện Công thức sấy — kết nối backend thật
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from "react";
 import {
   Typography,
   Card,
@@ -22,7 +22,7 @@ import {
   Modal,
   InputNumber,
   Divider,
-} from 'antd';
+} from "antd";
 import {
   BookOutlined,
   PlusOutlined,
@@ -32,8 +32,13 @@ import {
   EyeInvisibleOutlined,
   EyeOutlined,
   MinusCircleOutlined,
-} from '@ant-design/icons';
-import { recipesApi, ApiRecipe, RecipeStagePayload, RecipeStepPayload } from '@/shared/lib/api';
+} from "@ant-design/icons";
+import {
+  recipesApi,
+  ApiRecipe,
+  RecipeStagePayload,
+  RecipeStepPayload,
+} from "@/shared/lib/api";
 
 const { Title, Text } = Typography;
 
@@ -41,14 +46,22 @@ export default function RecipesPage() {
   const { message, modal } = App.useApp();
   const [form] = Form.useForm();
   const [recipes, setRecipes] = useState<ApiRecipe[]>([]);
+  const [tableRecipes, setTableRecipes] = useState<ApiRecipe[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [tablePagination, setTablePagination] = useState({ current: 1, pageSize: 10 });
-  const [visibilityFilter, setVisibilityFilter] = useState<'all' | 'active' | 'inactive'>('all');
+  const [tableLoading, setTableLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [tablePagination, setTablePagination] = useState({
+    current: 1,
+    pageSize: 10,
+  });
+  const [tableTotal, setTableTotal] = useState(0);
+  const [visibilityFilter, setVisibilityFilter] = useState<
+    "all" | "active" | "inactive"
+  >("all");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [editingRecipe, setEditingRecipe] = useState<ApiRecipe | null>(null);
-  const watchedStages = Form.useWatch('stages', form);
+  const watchedStages = Form.useWatch("stages", form);
 
   const sumStageMinutes = (stages: Array<{ durationMinutes?: number }>) =>
     stages.reduce((sum, stage) => {
@@ -66,32 +79,63 @@ export default function RecipesPage() {
     return `${hours}h ${remainMinutes}m`;
   };
 
-  const loadRecipes = async () => {
+  const loadRecipes = useCallback(async () => {
     try {
       const data = await recipesApi.getAll({ includeInactive: true });
       setRecipes(data);
     } catch {
-      message.error('Không thể tải danh sách công thức.');
+      message.error("Không thể tải danh sách công thức.");
     } finally {
       setLoading(false);
     }
-  };
+  }, [message]);
 
-  useEffect(() => { loadRecipes(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const loadTableRecipes = useCallback(async () => {
+    try {
+      setTableLoading(true);
+      const data = await recipesApi.getPage({
+        includeInactive: true,
+        status: visibilityFilter,
+        search,
+        page: tablePagination.current,
+        pageSize: tablePagination.pageSize,
+      });
+      setTableRecipes(data.items);
+      setTableTotal(data.pagination.total);
+    } catch {
+      message.error("Không thể tải danh sách công thức theo trang.");
+    } finally {
+      setTableLoading(false);
+    }
+  }, [message, search, visibilityFilter, tablePagination]);
+
+  useEffect(() => {
+    void loadRecipes();
+  }, [loadRecipes]);
+
+  useEffect(() => {
+    void loadTableRecipes();
+  }, [loadTableRecipes]);
+
+  useEffect(() => {
+    setTablePagination((prev) =>
+      prev.current === 1 ? prev : { ...prev, current: 1 },
+    );
+  }, [search, visibilityFilter]);
 
   useEffect(() => {
     const stages = Array.isArray(watchedStages)
       ? (watchedStages as Array<{ durationMinutes?: number }>)
       : [];
     const total = sumStageMinutes(stages);
-    form.setFieldValue('timeDurationEst', Math.max(1, Math.round(total || 0)));
+    form.setFieldValue("timeDurationEst", Math.max(1, Math.round(total || 0)));
   }, [form, watchedStages]);
 
   const openCreateModal = () => {
     setEditingRecipe(null);
     form.setFieldsValue({
-      recipeName: '',
-      recipeFruits: '',
+      recipeName: "",
+      recipeFruits: "",
       timeDurationEst: 60,
       stages: [
         {
@@ -107,19 +151,21 @@ export default function RecipesPage() {
 
   const openEditModal = (recipe: ApiRecipe) => {
     setEditingRecipe(recipe);
-    const mappedStages = (recipe.stages ?? []).length > 0
-      ? recipe.stages
-      : (recipe.steps ?? []).map((step, idx) => ({
-        stageOrder: step.stepNo ?? idx + 1,
-        durationMinutes: step.durationMinutes ?? 30,
-        temperatureSetpoint: step.temperatureGoal ?? 50,
-        humiditySetpoint: step.humidityGoal ?? 30,
-      }));
+    const mappedStages =
+      (recipe.stages ?? []).length > 0
+        ? recipe.stages
+        : (recipe.steps ?? []).map((step, idx) => ({
+            stageOrder: step.stepNo ?? idx + 1,
+            durationMinutes: step.durationMinutes ?? 30,
+            temperatureSetpoint: step.temperatureGoal ?? 50,
+            humiditySetpoint: step.humidityGoal ?? 30,
+          }));
 
     form.setFieldsValue({
-      recipeName: recipe.recipeName ?? '',
-      recipeFruits: recipe.recipeFruits ?? '',
-      timeDurationEst: sumStageMinutes(mappedStages) || recipe.timeDurationEst || 60,
+      recipeName: recipe.recipeName ?? "",
+      recipeFruits: recipe.recipeFruits ?? "",
+      timeDurationEst:
+        sumStageMinutes(mappedStages) || recipe.timeDurationEst || 60,
       stages: mappedStages,
     });
     setIsModalOpen(true);
@@ -132,51 +178,59 @@ export default function RecipesPage() {
 
       const rawStages = Array.isArray(values.stages) ? values.stages : [];
       const normalizedStages: RecipeStagePayload[] = rawStages
-        .map((stage: {
-          stageOrder: number;
-          durationMinutes: number;
-          temperatureSetpoint: number;
-          humiditySetpoint: number;
-        }, idx: number) => ({
-          stageOrder: Number(stage.stageOrder ?? idx + 1),
-          durationMinutes: Number(stage.durationMinutes),
-          temperatureSetpoint: Number(stage.temperatureSetpoint),
-          humiditySetpoint: Number(stage.humiditySetpoint),
-        }))
+        .map(
+          (
+            stage: {
+              stageOrder: number;
+              durationMinutes: number;
+              temperatureSetpoint: number;
+              humiditySetpoint: number;
+            },
+            idx: number,
+          ) => ({
+            stageOrder: Number(stage.stageOrder ?? idx + 1),
+            durationMinutes: Number(stage.durationMinutes),
+            temperatureSetpoint: Number(stage.temperatureSetpoint),
+            humiditySetpoint: Number(stage.humiditySetpoint),
+          }),
+        )
         .sort(
           (a: RecipeStagePayload, b: RecipeStagePayload) =>
             a.stageOrder - b.stageOrder,
         );
       const totalStageMinutes = sumStageMinutes(normalizedStages);
 
-      const derivedSteps: RecipeStepPayload[] = normalizedStages.map((stage) => ({
-        stepNo: stage.stageOrder,
-        durationMinutes: stage.durationMinutes,
-        temperatureGoal: stage.temperatureSetpoint,
-        humidityGoal: stage.humiditySetpoint,
-        fanStatus: 'On',
-      }));
+      const derivedSteps: RecipeStepPayload[] = normalizedStages.map(
+        (stage) => ({
+          stepNo: stage.stageOrder,
+          durationMinutes: stage.durationMinutes,
+          temperatureGoal: stage.temperatureSetpoint,
+          humidityGoal: stage.humiditySetpoint,
+          fanStatus: "On",
+        }),
+      );
 
       const payload = {
         recipeName: String(values.recipeName).trim(),
-        recipeFruits: String(values.recipeFruits ?? '').trim() || undefined,
-        timeDurationEst: totalStageMinutes > 0
-          ? totalStageMinutes
-          : Number(values.timeDurationEst),
+        recipeFruits: String(values.recipeFruits ?? "").trim() || undefined,
+        timeDurationEst:
+          totalStageMinutes > 0
+            ? totalStageMinutes
+            : Number(values.timeDurationEst),
         stages: normalizedStages,
         steps: derivedSteps,
       };
 
       if (editingRecipe) {
         await recipesApi.update(editingRecipe.recipeID, payload);
-        message.success('Đã cập nhật công thức và RecipeStage.');
+        message.success("Đã cập nhật công thức và RecipeStage.");
       } else {
         await recipesApi.create(payload);
-        message.success('Đã tạo công thức mới cùng RecipeStage.');
+        message.success("Đã tạo công thức mới cùng RecipeStage.");
       }
 
       setIsModalOpen(false);
-      await loadRecipes();
+      await Promise.all([loadRecipes(), loadTableRecipes()]);
     } catch {
       // Validation/API error is surfaced by form/message.
     } finally {
@@ -191,84 +245,84 @@ export default function RecipesPage() {
 
     modal.confirm({
       title: `Xóa vĩnh viễn công thức "${recipe.recipeName}"?`,
-      content: 'Chỉ nên xóa khi công thức chưa từng được dùng cho mẻ nào.',
-      okText: 'Xóa',
+      content: "Chỉ nên xóa khi công thức chưa từng được dùng cho mẻ nào.",
+      okText: "Xóa",
       okButtonProps: { danger: true },
-      cancelText: 'Hủy',
+      cancelText: "Hủy",
       onOk: async () => {
         try {
           const result = await recipesApi.remove(recipe.recipeID);
-          if (result.action === 'deleted') {
-            message.success('Đã xóa vĩnh viễn công thức.');
+          if (result.action === "deleted") {
+            message.success("Đã xóa vĩnh viễn công thức.");
           } else {
-            message.info('Công thức đã được ẩn vì đã có mẻ tham chiếu.');
+            message.info("Công thức đã được ẩn vì đã có mẻ tham chiếu.");
           }
-          await loadRecipes();
+          await Promise.all([loadRecipes(), loadTableRecipes()]);
         } catch {
-          message.error('Xóa công thức thất bại.');
+          message.error("Xóa công thức thất bại.");
         }
       },
     });
   };
 
-  const handleToggleVisibility = async (recipe: ApiRecipe, nextIsActive: boolean) => {
+  const handleToggleVisibility = async (
+    recipe: ApiRecipe,
+    nextIsActive: boolean,
+  ) => {
     try {
       await recipesApi.update(recipe.recipeID, { isActive: nextIsActive });
-      message.success(nextIsActive ? 'Đã hiển thị lại công thức.' : 'Đã ẩn công thức.');
-      await loadRecipes();
+      message.success(
+        nextIsActive ? "Đã hiển thị lại công thức." : "Đã ẩn công thức.",
+      );
+      await Promise.all([loadRecipes(), loadTableRecipes()]);
     } catch {
-      message.error('Cập nhật trạng thái công thức thất bại.');
+      message.error("Cập nhật trạng thái công thức thất bại.");
     }
   };
 
-  const filtered = recipes.filter((r) => {
-    const matchedKeyword =
-      (r.recipeName ?? '').toLowerCase().includes(search.toLowerCase()) ||
-      (r.recipeFruits ?? '').toLowerCase().includes(search.toLowerCase());
-
-    const matchedVisibility =
-      visibilityFilter === 'all' ||
-      (visibilityFilter === 'active' && r.isActive) ||
-      (visibilityFilter === 'inactive' && !r.isActive);
-
-    return matchedKeyword && matchedVisibility;
-  });
-
-  useEffect(() => {
-    setTablePagination((prev) => ({ ...prev, current: 1 }));
-  }, [search, visibilityFilter]);
-
   const columns = [
-    { title: 'ID', dataIndex: 'recipeID', width: 60 },
-    { title: 'Tên công thức', dataIndex: 'recipeName', render: (v: string) => <Text strong>{v}</Text> },
-    { title: 'Loại trái cây', dataIndex: 'recipeFruits', render: (v: string) => <Tag color="green">{v}</Tag> },
+    { title: "ID", dataIndex: "recipeID", width: 60 },
     {
-      title: 'Trạng thái',
-      key: 'isActive',
+      title: "Tên công thức",
+      dataIndex: "recipeName",
+      render: (v: string) => <Text strong>{v}</Text>,
+    },
+    {
+      title: "Loại trái cây",
+      dataIndex: "recipeFruits",
+      render: (v: string) => <Tag color="green">{v}</Tag>,
+    },
+    {
+      title: "Trạng thái",
+      key: "isActive",
       render: (_: unknown, r: ApiRecipe) => (
-        <Tag color={r.isActive ? 'success' : 'default'}>
-          {r.isActive ? 'Hiện' : 'Ẩn'}
+        <Tag color={r.isActive ? "success" : "default"}>
+          {r.isActive ? "Hiện" : "Ẩn"}
         </Tag>
       ),
     },
     {
-      title: 'Số mẻ đã dùng',
-      dataIndex: 'batchCount',
+      title: "Số mẻ đã dùng",
+      dataIndex: "batchCount",
       render: (v: number) => v ?? 0,
     },
     {
-      title: 'Thời gian ước tính',
-      dataIndex: 'timeDurationEst',
-      render: (v: number) => (v ? formatDuration(v) : '—'),
+      title: "Thời gian ước tính",
+      dataIndex: "timeDurationEst",
+      render: (v: number) => (v ? formatDuration(v) : "—"),
     },
     {
-      title: 'Đồng bộ TG',
-      key: 'durationConsistency',
+      title: "Đồng bộ TG",
+      key: "durationConsistency",
       render: (_: unknown, r: ApiRecipe) => {
         const stageMinutes = sumStageMinutes(r.stages ?? []);
         const estimatedMinutes = Number(r.timeDurationEst ?? 0);
 
-        if (stageMinutes <= 0 || !Number.isFinite(estimatedMinutes) || estimatedMinutes <= 0) {
+        if (
+          stageMinutes <= 0 ||
+          !Number.isFinite(estimatedMinutes) ||
+          estimatedMinutes <= 0
+        ) {
           return <Tag color="default">Chưa đủ dữ liệu</Tag>;
         }
 
@@ -278,31 +332,44 @@ export default function RecipesPage() {
 
         return (
           <Tag color="warning">
-            Lệch: stage {formatDuration(stageMinutes)} / total {formatDuration(estimatedMinutes)}
+            Lệch: stage {formatDuration(stageMinutes)} / total{" "}
+            {formatDuration(estimatedMinutes)}
           </Tag>
         );
       },
     },
     {
-      title: 'Số stage',
-      key: 'stages',
-      render: (_: unknown, r: ApiRecipe) => r.stages?.length ?? r.steps?.length ?? 0,
+      title: "Số stage",
+      key: "stages",
+      render: (_: unknown, r: ApiRecipe) =>
+        r.stages?.length ?? r.steps?.length ?? 0,
     },
     {
-      title: 'Thao tác',
-      key: 'action',
+      title: "Thao tác",
+      key: "action",
       render: (_: unknown, record: ApiRecipe) => (
         <Space>
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEditModal(record)} />
+          <Button
+            size="small"
+            icon={<EditOutlined />}
+            onClick={() => openEditModal(record)}
+          />
           <Button
             size="small"
             icon={record.isActive ? <EyeInvisibleOutlined /> : <EyeOutlined />}
-            onClick={() => void handleToggleVisibility(record, !record.isActive)}
+            onClick={() =>
+              void handleToggleVisibility(record, !record.isActive)
+            }
           >
-            {record.isActive ? 'Ẩn' : 'Hiện'}
+            {record.isActive ? "Ẩn" : "Hiện"}
           </Button>
           {record.batchCount === 0 && (
-            <Button size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete(record)}>
+            <Button
+              size="small"
+              danger
+              icon={<DeleteOutlined />}
+              onClick={() => handleDelete(record)}
+            >
               Xóa
             </Button>
           )}
@@ -311,17 +378,31 @@ export default function RecipesPage() {
     },
   ];
 
-  if (loading) return <div style={{ textAlign: 'center', padding: 60 }}><Spin size="large" /></div>;
+  if (loading)
+    return (
+      <div style={{ textAlign: "center", padding: 60 }}>
+        <Spin size="large" />
+      </div>
+    );
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          marginBottom: 24,
+        }}
+      >
         <div>
           <Title level={2} style={{ margin: 0 }}>
-            <BookOutlined style={{ marginRight: 10, color: '#1677ff' }} />
+            <BookOutlined style={{ marginRight: 10, color: "#1677ff" }} />
             Thư viện Công thức
           </Title>
-          <Text type="secondary">Quản lý các công thức sấy chuẩn cho từng loại trái cây</Text>
+          <Text type="secondary">
+            Quản lý các công thức sấy chuẩn cho từng loại trái cây
+          </Text>
         </div>
         <Space>
           <Input
@@ -329,20 +410,26 @@ export default function RecipesPage() {
             placeholder="Tìm công thức..."
             style={{ width: 220 }}
             value={search}
-            onChange={e => setSearch(e.target.value)}
+            onChange={(e) => setSearch(e.target.value)}
             allowClear
           />
           <Select
             style={{ width: 150 }}
             value={visibilityFilter}
-            onChange={(value: 'all' | 'active' | 'inactive') => setVisibilityFilter(value)}
+            onChange={(value: "all" | "active" | "inactive") =>
+              setVisibilityFilter(value)
+            }
             options={[
-              { value: 'all', label: 'Tất cả' },
-              { value: 'active', label: 'Đang hiện' },
-              { value: 'inactive', label: 'Đang ẩn' },
+              { value: "all", label: "Tất cả" },
+              { value: "active", label: "Đang hiện" },
+              { value: "inactive", label: "Đang ẩn" },
             ]}
           />
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={openCreateModal}
+          >
             Thêm công thức
           </Button>
         </Space>
@@ -351,30 +438,32 @@ export default function RecipesPage() {
       {/* Stats */}
       <Row gutter={16} style={{ marginBottom: 24 }}>
         <Col span={6}>
-          <Card style={{ borderRadius: 12, textAlign: 'center' }}>
-            <div style={{ fontSize: 32, fontWeight: 700, color: '#1677ff' }}>{recipes.filter((r) => r.isActive).length}</div>
+          <Card style={{ borderRadius: 12, textAlign: "center" }}>
+            <div style={{ fontSize: 32, fontWeight: 700, color: "#1677ff" }}>
+              {recipes.filter((r) => r.isActive).length}
+            </div>
             <Text type="secondary">Công thức đang hiện</Text>
           </Card>
         </Col>
         <Col span={6}>
-          <Card style={{ borderRadius: 12, textAlign: 'center' }}>
-            <div style={{ fontSize: 32, fontWeight: 700, color: '#52c41a' }}>
-              {new Set(recipes.map(r => r.recipeFruits).filter(Boolean)).size}
+          <Card style={{ borderRadius: 12, textAlign: "center" }}>
+            <div style={{ fontSize: 32, fontWeight: 700, color: "#52c41a" }}>
+              {new Set(recipes.map((r) => r.recipeFruits).filter(Boolean)).size}
             </div>
             <Text type="secondary">Loại trái cây</Text>
           </Card>
         </Col>
         <Col span={6}>
-          <Card style={{ borderRadius: 12, textAlign: 'center' }}>
-            <div style={{ fontSize: 32, fontWeight: 700, color: '#faad14' }}>
+          <Card style={{ borderRadius: 12, textAlign: "center" }}>
+            <div style={{ fontSize: 32, fontWeight: 700, color: "#faad14" }}>
               {recipes.reduce((sum, r) => sum + (r.batchCount ?? 0), 0)}
             </div>
             <Text type="secondary">Tổng lượt dùng trong mẻ</Text>
           </Card>
         </Col>
         <Col span={6}>
-          <Card style={{ borderRadius: 12, textAlign: 'center' }}>
-            <div style={{ fontSize: 32, fontWeight: 700, color: '#8c8c8c' }}>
+          <Card style={{ borderRadius: 12, textAlign: "center" }}>
+            <div style={{ fontSize: 32, fontWeight: 700, color: "#8c8c8c" }}>
               {recipes.filter((r) => !r.isActive).length}
             </div>
             <Text type="secondary">Công thức đang ẩn</Text>
@@ -385,16 +474,17 @@ export default function RecipesPage() {
       {/* Table */}
       <Card style={{ borderRadius: 12 }}>
         <Table
-          dataSource={filtered}
+          dataSource={tableRecipes}
           columns={columns}
           rowKey="recipeID"
+          loading={tableLoading}
           pagination={{
             current: tablePagination.current,
             pageSize: tablePagination.pageSize,
-            total: filtered.length,
+            total: tableTotal,
             showSizeChanger: true,
             showQuickJumper: false,
-            pageSizeOptions: ['10', '20', '30'],
+            pageSizeOptions: ["10", "20", "30"],
             onChange: (current, pageSize) => {
               setTablePagination({ current, pageSize });
             },
@@ -403,11 +493,11 @@ export default function RecipesPage() {
       </Card>
 
       <Modal
-        title={editingRecipe ? 'Chỉnh sửa công thức' : 'Tạo công thức mới'}
+        title={editingRecipe ? "Chỉnh sửa công thức" : "Tạo công thức mới"}
         open={isModalOpen}
         onCancel={() => setIsModalOpen(false)}
         onOk={() => void handleSaveRecipe()}
-        okText={editingRecipe ? 'Lưu thay đổi' : 'Tạo công thức'}
+        okText={editingRecipe ? "Lưu thay đổi" : "Tạo công thức"}
         cancelText="Hủy"
         width={920}
         confirmLoading={submitting}
@@ -418,7 +508,9 @@ export default function RecipesPage() {
               <Form.Item
                 label="Tên công thức"
                 name="recipeName"
-                rules={[{ required: true, message: 'Vui lòng nhập tên công thức.' }]}
+                rules={[
+                  { required: true, message: "Vui lòng nhập tên công thức." },
+                ]}
               >
                 <Input placeholder="Ví dụ: Xoài sấy dẻo" />
               </Form.Item>
@@ -429,61 +521,88 @@ export default function RecipesPage() {
               </Form.Item>
             </Col>
             <Col span={6}>
-              <Form.Item
-                label="Tổng thời gian (phút)"
-                name="timeDurationEst"
-              >
-                <InputNumber min={1} style={{ width: '100%' }} disabled readOnly />
+              <Form.Item label="Tổng thời gian (phút)" name="timeDurationEst">
+                <InputNumber
+                  min={1}
+                  style={{ width: "100%" }}
+                  disabled
+                  readOnly
+                />
               </Form.Item>
             </Col>
           </Row>
 
-          <Divider orientation="left" style={{ marginTop: 0 }}>RecipeStage</Divider>
+          <Divider orientation="left" style={{ marginTop: 0 }}>
+            RecipeStage
+          </Divider>
 
           <Form.List name="stages">
             {(fields, { add, remove }) => (
-              <Space direction="vertical" style={{ width: '100%' }} size={10}>
+              <Space direction="vertical" style={{ width: "100%" }} size={10}>
                 {fields.map((field, index) => (
-                  <Card key={field.key} size="small" style={{ borderRadius: 10 }}>
+                  <Card
+                    key={field.key}
+                    size="small"
+                    style={{ borderRadius: 10 }}
+                  >
                     <Row gutter={10} align="middle">
                       <Col span={4}>
                         <Form.Item
                           {...field}
                           label="Thứ tự"
-                          name={[field.name, 'stageOrder']}
-                          rules={[{ required: true, message: 'Nhập thứ tự.' }]}
+                          name={[field.name, "stageOrder"]}
+                          rules={[{ required: true, message: "Nhập thứ tự." }]}
                         >
-                          <InputNumber min={1} style={{ width: '100%' }} />
+                          <InputNumber min={1} style={{ width: "100%" }} />
                         </Form.Item>
                       </Col>
                       <Col span={6}>
                         <Form.Item
                           {...field}
                           label="Thời lượng (phút)"
-                          name={[field.name, 'durationMinutes']}
-                          rules={[{ required: true, message: 'Nhập thời lượng.' }]}
+                          name={[field.name, "durationMinutes"]}
+                          rules={[
+                            { required: true, message: "Nhập thời lượng." },
+                          ]}
                         >
-                          <InputNumber min={1} style={{ width: '100%' }} />
+                          <InputNumber min={1} style={{ width: "100%" }} />
                         </Form.Item>
                       </Col>
                       <Col span={6}>
                         <Form.Item
                           {...field}
                           label="Nhiệt độ setpoint"
-                          name={[field.name, 'temperatureSetpoint']}
-                          rules={[{ required: true, message: 'Nhập setpoint nhiệt độ.' }]}
+                          name={[field.name, "temperatureSetpoint"]}
+                          rules={[
+                            {
+                              required: true,
+                              message: "Nhập setpoint nhiệt độ.",
+                            },
+                          ]}
                         >
-                          <InputNumber min={0} max={150} style={{ width: '100%' }} addonAfter="°C" />
+                          <InputNumber
+                            min={0}
+                            max={150}
+                            style={{ width: "100%" }}
+                            addonAfter="°C"
+                          />
                         </Form.Item>
                       </Col>
                       <Col span={6}>
                         <Form.Item
                           {...field}
                           label="Độ ẩm setpoint"
-                          name={[field.name, 'humiditySetpoint']}
-                          rules={[{ required: true, message: 'Nhập setpoint độ ẩm.' }]}
+                          name={[field.name, "humiditySetpoint"]}
+                          rules={[
+                            { required: true, message: "Nhập setpoint độ ẩm." },
+                          ]}
                         >
-                          <InputNumber min={0} max={100} style={{ width: '100%' }} addonAfter="%" />
+                          <InputNumber
+                            min={0}
+                            max={100}
+                            style={{ width: "100%" }}
+                            addonAfter="%"
+                          />
                         </Form.Item>
                       </Col>
                       <Col span={2}>
@@ -498,7 +617,8 @@ export default function RecipesPage() {
                       </Col>
                     </Row>
                     <Text type="secondary" style={{ fontSize: 12 }}>
-                      Stage {index + 1}: Hệ thống dùng dữ liệu này để auto chuyển giai đoạn khi Batch đang chạy.
+                      Stage {index + 1}: Hệ thống dùng dữ liệu này để auto
+                      chuyển giai đoạn khi Batch đang chạy.
                     </Text>
                   </Card>
                 ))}

@@ -122,7 +122,6 @@ export function OperatorProvider({
       if (status === 'error' || status === 'fault' || status === 'offline') {
         return 'Error';
       }
-      if (status === 'inactive') return 'Idle';
       return 'Idle';
     };
 
@@ -139,6 +138,10 @@ export function OperatorProvider({
 
         const mappedMachines: Machine[] = chamberRows
           .filter((row) => {
+            const status = String(row.chamberStatus ?? '').trim().toLowerCase();
+            if (status === 'inactive' || status === 'deleted') {
+              return false;
+            }
             if (allowedZones.size === 0) return true;
             const rowZone = String(row.zoneName ?? '').toLowerCase();
             return allowedZones.has(rowZone);

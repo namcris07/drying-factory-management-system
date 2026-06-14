@@ -699,6 +699,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       normalized.includes('led') ||
       normalized.includes('lcd') ||
       normalized.includes('heater') ||
+      normalized.includes('pump') ||
       normalized.includes('humidifier') ||
       normalized.includes('doorlock')
     );
@@ -830,6 +831,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       'led_state',
       'heater_state',
       'humidifier_state',
+      'pump',
       'door_lock',
     ];
     return controlFeeds.some(
@@ -1902,7 +1904,10 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       matchedActions.push({
         ruleId: rule.id,
         fanFeed: rule.fanFeed,
-        targetLevel,
+        targetLevel: this.normalizeDynamicActuatorTargetLevel(
+          rule.fanFeed,
+          targetLevel,
+        ),
         priority: rule.priority,
         cooldownMs: rule.cooldownMs,
       });
@@ -1919,15 +1924,35 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
             this.isTemperatureFeedMarkedFaulty(sensorFeed)),
       );
 
-      if (!isMatched) {
-        continue;
-      }
-
       for (const candidate of this.groupRuleSpecification.toCandidates(
         group as DynamicFanGroupRuleLike,
-        true,
+        isMatched,
       )) {
-        matchedActions.push(candidate);
+        const stateKey = this.normalizeFeedKey(candidate.fanFeed);
+        const previous = this.fanRuleResolutionState.get(stateKey);
+
+        if (isMatched) {
+          matchedActions.push({
+            ...candidate,
+            targetLevel: this.normalizeDynamicActuatorTargetLevel(
+              candidate.fanFeed,
+              candidate.targetLevel,
+            ),
+          });
+          continue;
+        }
+
+        if (previous?.ruleId !== group.id || previous.value <= 0) {
+          continue;
+        }
+
+        matchedActions.push({
+          ...candidate,
+          targetLevel: this.normalizeDynamicActuatorTargetLevel(
+            candidate.fanFeed,
+            candidate.targetLevel,
+          ),
+        });
       }
     }
 
@@ -2001,6 +2026,24 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
         `Dynamic fan resolver applied: rule=${selected.ruleId} feed=${selected.fanFeed} level=${selected.targetLevel} priority=${selected.priority} cooldownMs=${effectiveCooldown}`,
       );
     }
+  }
+
+  private normalizeDynamicActuatorTargetLevel(
+    feed: string,
+    targetLevel: number,
+  ): number {
+    const normalizedFeed = this.normalizeFeedKey(feed);
+    const clampedLevel = Math.max(0, Math.min(100, Math.round(targetLevel)));
+
+    if (normalizedFeed.includes('fan')) {
+      return clampedLevel;
+    }
+
+    if (normalizedFeed.includes('led') || normalizedFeed.includes('pump')) {
+      return clampedLevel > 0 ? 1 : 0;
+    }
+
+    return clampedLevel;
   }
 
   private async resolveDeviceByFeed(feed: string) {

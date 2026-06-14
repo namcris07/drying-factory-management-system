@@ -6,28 +6,50 @@ import { ResolveAlertDto, CreateAlertDto } from './dto/resolve-alert.dto';
 export class AlertsService {
   constructor(private prisma: PrismaService) {}
 
-  findAll(status?: string) {
-    return this.prisma.alert.findMany({
-      where: status ? { alertStatus: status } : undefined,
-      include: {
-        device: { select: { deviceID: true, deviceName: true } },
-        alertResolutions: {
-          orderBy: { resolveTime: 'desc' },
-          take: 1,
-          include: {
-            user: {
-              select: {
-                userID: true,
-                firstName: true,
-                lastName: true,
-                email: true,
+  async findAll(status?: string, page?: number, pageSize?: number) {
+    const p = Math.max(1, Number(page ?? 1));
+    const ps = Math.min(100, Math.max(1, Number(pageSize ?? 10)));
+    const skip = (p - 1) * ps;
+
+    const where = status ? { alertStatus: status } : undefined;
+
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.alert.findMany({
+        where,
+        include: {
+          device: { select: { deviceID: true, deviceName: true } },
+          alertResolutions: {
+            orderBy: { resolveTime: 'desc' },
+            take: 1,
+            include: {
+              user: {
+                select: {
+                  userID: true,
+                  firstName: true,
+                  lastName: true,
+                  email: true,
+                  role: true,
+                },
               },
             },
           },
         },
+        orderBy: { alertTime: 'desc' },
+        skip,
+        take: ps,
+      }),
+      this.prisma.alert.count({ where }),
+    ]);
+
+    return {
+      items,
+      pagination: {
+        page: p,
+        pageSize: ps,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / ps)),
       },
-      orderBy: { alertTime: 'desc' },
-    });
+    };
   }
 
   async findOne(id: number) {
@@ -83,6 +105,7 @@ export class AlertsService {
               firstName: true,
               lastName: true,
               email: true,
+              role: true,
             },
           },
         },

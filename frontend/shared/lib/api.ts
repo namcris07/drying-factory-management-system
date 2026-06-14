@@ -4,13 +4,13 @@
  * All HTTP requests go through this module.
  */
 
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4001/api';
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4001/api";
 
 function getActorHeaders(): Record<string, string> {
-  if (typeof window === 'undefined') return {};
+  if (typeof window === "undefined") return {};
 
   try {
-    const raw = localStorage.getItem('drytechUser');
+    const raw = localStorage.getItem("drytechUser");
     if (!raw) return {};
     const parsed = JSON.parse(raw) as {
       userID?: unknown;
@@ -18,14 +18,15 @@ function getActorHeaders(): Record<string, string> {
     };
 
     const userID = Number(parsed.userID);
-    const role = String(parsed.role ?? '');
+    const role = String(parsed.role ?? "");
 
     if (!Number.isInteger(userID) || userID <= 0) return {};
-    if (role !== 'Admin' && role !== 'Manager' && role !== 'Operator') return {};
+    if (role !== "Admin" && role !== "Manager" && role !== "Operator")
+      return {};
 
     return {
-      'x-user-id': String(userID),
-      'x-user-role': role,
+      "x-user-id": String(userID),
+      "x-user-role": role,
     };
   } catch {
     return {};
@@ -38,7 +39,7 @@ export class ApiError extends Error {
     message: string,
   ) {
     super(message);
-    this.name = 'ApiError';
+    this.name = "ApiError";
   }
 }
 
@@ -46,7 +47,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const actorHeaders = getActorHeaders();
   const res = await fetch(`${BASE_URL}${path}`, {
     headers: {
-      'Content-Type': 'application/json',
+      "Content-Type": "application/json",
       ...actorHeaders,
       ...init?.headers,
     },
@@ -69,10 +70,10 @@ export const authApi = {
       zone: string;
       zones?: { zoneID: number; zoneName: string }[];
       email: string;
-    }>(
-      '/auth/login',
-      { method: 'POST', body: JSON.stringify({ email, password }) },
-    ),
+    }>("/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    }),
 };
 
 // ── Users ─────────────────────────────────────────────────────────────────
@@ -88,7 +89,7 @@ export type ApiUser = {
 };
 
 export const usersApi = {
-  getAll: () => request<ApiUser[]>('/users'),
+  getAll: () => request<ApiUser[]>("/users"),
   getOne: (id: number) => request<ApiUser>(`/users/${id}`),
   create: (data: {
     firstName: string;
@@ -97,7 +98,8 @@ export const usersApi = {
     password: string;
     role: string;
     chamberIDs?: number[];
-  }) => request<ApiUser>('/users', { method: 'POST', body: JSON.stringify(data) }),
+  }) =>
+    request<ApiUser>("/users", { method: "POST", body: JSON.stringify(data) }),
   update: (
     id: number,
     data: Partial<{
@@ -109,8 +111,12 @@ export const usersApi = {
       password: string;
       chamberIDs: number[];
     }>,
-  ) => request<ApiUser>(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-  remove: (id: number) => request<void>(`/users/${id}`, { method: 'DELETE' }),
+  ) =>
+    request<ApiUser>(`/users/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+  remove: (id: number) => request<void>(`/users/${id}`, { method: "DELETE" }),
 };
 
 // ── Zones ─────────────────────────────────────────────────────────────────
@@ -123,12 +129,18 @@ export type ApiZone = {
 };
 
 export const zonesApi = {
-  getAll: () => request<ApiZone[]>('/zones'),
+  getAll: () => request<ApiZone[]>("/zones"),
   create: (data: { zoneName: string; zoneDescription?: string }) =>
-    request<ApiZone>('/zones', { method: 'POST', body: JSON.stringify(data) }),
-  update: (id: number, data: Partial<{ zoneName: string; zoneDescription: string }>) =>
-    request<ApiZone>(`/zones/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-  remove: (id: number) => request<void>(`/zones/${id}`, { method: 'DELETE' }),
+    request<ApiZone>("/zones", { method: "POST", body: JSON.stringify(data) }),
+  update: (
+    id: number,
+    data: Partial<{ zoneName: string; zoneDescription: string }>,
+  ) =>
+    request<ApiZone>(`/zones/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+  remove: (id: number) => request<void>(`/zones/${id}`, { method: "DELETE" }),
 };
 
 export type ApiChamber = {
@@ -153,7 +165,7 @@ export type ApiChamber = {
 };
 
 export const chambersApi = {
-  getAll: () => request<ApiChamber[]>('/chambers'),
+  getAll: () => request<ApiChamber[]>("/chambers"),
   getOne: (id: number) => request<ApiChamber>(`/chambers/${id}`),
   create: (data: {
     chamberName: string;
@@ -179,33 +191,43 @@ export const chambersApi = {
       status?: string;
     }[];
   }) =>
-    request<ApiChamber>('/chambers', { method: 'POST', body: JSON.stringify(data) }),
-  update: (id: number, data: Partial<{
-    chamberName: string;
-    chamberDescription: string;
-    zoneID: number;
-    chamberStatus: string;
-    sensors: {
-      sensorName?: string;
-      sensorType: string;
-      feedKey: string;
-      status?: string;
-    }[];
-    sensorChannels: {
-      sensorName?: string;
-      sensorType: string;
-      feedKey: string;
-      status?: string;
-    }[];
-    actuatorChannels: {
-      actuatorName?: string;
-      actuatorType: string;
-      feedKey: string;
-      status?: string;
-    }[];
-  }>) =>
-    request<ApiChamber>(`/chambers/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-  remove: (id: number) => request<{ ok: boolean }>(`/chambers/${id}`, { method: 'DELETE' }),
+    request<ApiChamber>("/chambers", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  update: (
+    id: number,
+    data: Partial<{
+      chamberName: string;
+      chamberDescription: string;
+      zoneID: number;
+      chamberStatus: string;
+      sensors: {
+        sensorName?: string;
+        sensorType: string;
+        feedKey: string;
+        status?: string;
+      }[];
+      sensorChannels: {
+        sensorName?: string;
+        sensorType: string;
+        feedKey: string;
+        status?: string;
+      }[];
+      actuatorChannels: {
+        actuatorName?: string;
+        actuatorType: string;
+        feedKey: string;
+        status?: string;
+      }[];
+    }>,
+  ) =>
+    request<ApiChamber>(`/chambers/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+  remove: (id: number) =>
+    request<{ ok: boolean }>(`/chambers/${id}`, { method: "DELETE" }),
 };
 
 // ── Devices ───────────────────────────────────────────────────────────────
@@ -279,22 +301,29 @@ export type DeviceUpsertPayload = {
 export type DevicePatchPayload = Partial<DeviceUpsertPayload>;
 
 export const devicesApi = {
-  getAll: () => request<ApiDevice[]>('/devices'),
+  getAll: () => request<ApiDevice[]>("/devices"),
   create: (data: DeviceUpsertPayload) =>
-    request<ApiDevice>('/devices', { method: 'POST', body: JSON.stringify(data) }),
+    request<ApiDevice>("/devices", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
   update: (id: number, data: DevicePatchPayload) =>
-    request<ApiDevice>(`/devices/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    request<ApiDevice>(`/devices/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
   validateFeeds: (data: {
     mqttTopicSensor?: string;
     mqttTopicCmd?: string;
     sensorChannels?: { feedKey: string }[];
     actuatorChannels?: { feedKey: string }[];
     currentDeviceId?: number;
-  }) => request<{ ok: boolean }>('/devices/validate-feeds', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  }),
-  remove: (id: number) => request<void>(`/devices/${id}`, { method: 'DELETE' }),
+  }) =>
+    request<{ ok: boolean }>("/devices/validate-feeds", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  remove: (id: number) => request<void>(`/devices/${id}`, { method: "DELETE" }),
 };
 
 // ── Recipes ───────────────────────────────────────────────────────────────
@@ -342,15 +371,37 @@ export type ApiRecipe = {
   stages: ApiRecipeStage[];
 };
 
+export type ApiRecipeList = {
+  items: ApiRecipe[];
+  pagination: ApiPagination;
+};
+
 export type RecipeRemoveResult =
-  | { action: 'hidden'; recipe: ApiRecipe }
-  | { action: 'deleted'; recipeID: number };
+  | { action: "hidden"; recipe: ApiRecipe }
+  | { action: "deleted"; recipeID: number };
 
 export const recipesApi = {
   getAll: (params?: { includeInactive?: boolean }) =>
     request<ApiRecipe[]>(
-      `/recipes${params?.includeInactive ? '?includeInactive=true' : ''}`,
+      `/recipes${params?.includeInactive ? "?includeInactive=true" : ""}`,
     ),
+  getPage: (params?: {
+    includeInactive?: boolean;
+    status?: "all" | "active" | "inactive";
+    search?: string;
+    page?: number;
+    pageSize?: number;
+  }) => {
+    const query = new URLSearchParams();
+    if (params?.includeInactive) query.set("includeInactive", "true");
+    if (params?.status) query.set("status", params.status);
+    if (params?.search) query.set("search", params.search);
+    if (params?.page) query.set("page", String(params.page));
+    if (params?.pageSize) query.set("pageSize", String(params.pageSize));
+
+    const q = query.toString();
+    return request<ApiRecipeList>(`/recipes${q ? `?${q}` : ""}`);
+  },
   getOne: (id: number) => request<ApiRecipe>(`/recipes/${id}`),
   create: (data: {
     recipeName: string;
@@ -361,7 +412,10 @@ export const recipesApi = {
     steps?: RecipeStepPayload[];
     stages?: RecipeStagePayload[];
   }) =>
-    request<ApiRecipe>('/recipes', { method: 'POST', body: JSON.stringify(data) }),
+    request<ApiRecipe>("/recipes", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
   update: (
     id: number,
     data: Partial<{
@@ -374,9 +428,12 @@ export const recipesApi = {
       stages: RecipeStagePayload[];
     }>,
   ) =>
-    request<ApiRecipe>(`/recipes/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    request<ApiRecipe>(`/recipes/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
   remove: (id: number) =>
-    request<RecipeRemoveResult>(`/recipes/${id}`, { method: 'DELETE' }),
+    request<RecipeRemoveResult>(`/recipes/${id}`, { method: "DELETE" }),
 };
 
 // ── Batches ───────────────────────────────────────────────────────────────
@@ -391,17 +448,19 @@ export type ApiBatch = {
   stageStartedAt: string | null;
   recipeID: number | null;
   deviceID: number | null;
-  recipe:
-    | {
-        recipeID: number;
-        recipeName: string | null;
-        timeDurationEst?: number | null;
-        stages?: ApiRecipeStage[];
-        steps?: ApiRecipeStep[];
-      }
-    | null;
+  recipe: {
+    recipeID: number;
+    recipeName: string | null;
+    timeDurationEst?: number | null;
+    stages?: ApiRecipeStage[];
+    steps?: ApiRecipeStep[];
+  } | null;
   device: { deviceID: number; deviceName: string | null } | null;
-  batchOperations: { boID: number; startedAt: string | null; endedAt: string | null }[];
+  batchOperations: {
+    boID: number;
+    startedAt: string | null;
+    endedAt: string | null;
+  }[];
 };
 
 export type ApiPagination = {
@@ -418,23 +477,38 @@ export type ApiBatchList = {
 
 export const batchesApi = {
   getAll: (query?: {
-    status?: 'all' | 'running' | 'completed' | 'fail';
+    status?: "all" | "running" | "completed" | "fail";
     page?: number;
     pageSize?: number;
   }) => {
     const params = new URLSearchParams();
-    if (query?.status) params.set('status', query.status);
-    if (query?.page) params.set('page', String(query.page));
-    if (query?.pageSize) params.set('pageSize', String(query.pageSize));
+    if (query?.status) params.set("status", query.status);
+    if (query?.page) params.set("page", String(query.page));
+    if (query?.pageSize) params.set("pageSize", String(query.pageSize));
     const q = params.toString();
-    return request<ApiBatchList>(`/batches${q ? `?${q}` : ''}`);
+    return request<ApiBatchList>(`/batches${q ? `?${q}` : ""}`);
   },
   getOne: (id: number) => request<ApiBatch>(`/batches/${id}`),
-  create: (data: { recipeID: number; deviceID?: number; chamberID?: number; operationMode?: string; startTime: string }) =>
-    request<ApiBatch>('/batches', { method: 'POST', body: JSON.stringify(data) }),
-  update: (id: number, data: { batchStatus?: string; batchResult?: string; currentStep?: number }) =>
-    request<ApiBatch>(`/batches/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-  remove: (id: number) => request<void>(`/batches/${id}`, { method: 'DELETE' }),
+  create: (data: {
+    recipeID: number;
+    deviceID?: number;
+    chamberID?: number;
+    operationMode?: string;
+    startTime: string;
+  }) =>
+    request<ApiBatch>("/batches", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  update: (
+    id: number,
+    data: { batchStatus?: string; batchResult?: string; currentStep?: number },
+  ) =>
+    request<ApiBatch>(`/batches/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+  remove: (id: number) => request<void>(`/batches/${id}`, { method: "DELETE" }),
 };
 
 // ── Alerts ────────────────────────────────────────────────────────────────
@@ -457,24 +531,59 @@ export type ApiAlert = {
       firstName: string | null;
       lastName: string | null;
       email: string | null;
+      role: string | null;
     } | null;
   }[];
 };
 
+export type ApiAlertList = {
+  items: ApiAlert[];
+  pagination: ApiPagination;
+};
+
+function unwrapAlertList(response: ApiAlert[] | ApiAlertList): ApiAlert[] {
+  return Array.isArray(response) ? response : response.items;
+}
+
 export const alertsApi = {
-  getAll: (status?: string) =>
-    request<ApiAlert[]>(`/alerts${status ? `?status=${status}` : ''}`),
+  getAll: async (status?: string) =>
+    unwrapAlertList(
+      await request<ApiAlert[] | ApiAlertList>(
+        `/alerts${status ? `?status=${status}` : ""}`,
+      ),
+    ),
+  getAllPaged: (query?: {
+    status?: string;
+    page?: number;
+    pageSize?: number;
+  }) => {
+    const params = new URLSearchParams();
+    if (query?.status) params.set("status", query.status);
+    if (query?.page) params.set("page", String(query.page));
+    if (query?.pageSize) params.set("pageSize", String(query.pageSize));
+    const q = params.toString();
+    return request<ApiAlertList>(`/alerts${q ? `?${q}` : ""}`);
+  },
   acknowledge: (id: number) =>
-    request<ApiAlert>(`/alerts/${id}/acknowledge`, { method: 'PATCH' }),
-  resolve: (id: number, data: { resolveStatus: string; resolveNote?: string; userID?: number }) =>
-    request<unknown>(`/alerts/${id}/resolve`, { method: 'PATCH', body: JSON.stringify(data) }),
+    request<ApiAlert>(`/alerts/${id}/acknowledge`, { method: "PATCH" }),
+  resolve: (
+    id: number,
+    data: { resolveStatus: string; resolveNote?: string; userID?: number },
+  ) =>
+    request<unknown>(`/alerts/${id}/resolve`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
 };
 
 // ── System Config ─────────────────────────────────────────────────────────
 export const systemConfigApi = {
-  getAll: () => request<Record<string, string>>('/system-config'),
+  getAll: () => request<Record<string, string>>("/system-config"),
   saveAll: (data: Record<string, string>) =>
-    request<Record<string, string>>('/system-config', { method: 'PATCH', body: JSON.stringify(data) }),
+    request<Record<string, string>>("/system-config", {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
 };
 
 // ── Sensor Data ───────────────────────────────────────────────────────────
@@ -489,8 +598,8 @@ export type ApiSensorLog = {
 export const sensorDataApi = {
   getRecent: (deviceId?: number, limit?: number) => {
     const params = new URLSearchParams();
-    if (deviceId) params.set('deviceId', String(deviceId));
-    if (limit) params.set('limit', String(limit));
+    if (deviceId) params.set("deviceId", String(deviceId));
+    if (limit) params.set("limit", String(limit));
     return request<ApiSensorLog[]>(`/sensor-data?${params}`);
   },
 };
@@ -500,7 +609,7 @@ export type ApiMqttStateItem = {
   feed: string;
   topic: string;
   value: unknown;
-  source: 'adafruit' | 'server-command' | 'server-simulate';
+  source: "adafruit" | "server-command" | "server-simulate";
   updatedAt: string;
 };
 
@@ -517,7 +626,7 @@ export type ApiMqttDeviceFeedState = {
   sensorType: string;
   topic: string | null;
   value: unknown;
-  source: 'adafruit' | 'server-command' | 'server-simulate' | null;
+  source: "adafruit" | "server-command" | "server-simulate" | null;
   updatedAt: string | null;
 };
 
@@ -527,21 +636,21 @@ export type ApiMqttDeviceState = {
 };
 
 export const mqttApi = {
-  getStatus: () => request<ApiMqttStatus>('/mqtt/status'),
-  getState: () => request<ApiMqttStateItem[]>('/mqtt/state'),
+  getStatus: () => request<ApiMqttStatus>("/mqtt/status"),
+  getState: () => request<ApiMqttStateItem[]>("/mqtt/state"),
   getDeviceState: (deviceId: number) =>
     request<ApiMqttDeviceState>(`/mqtt/device/${deviceId}/state`),
   subscribeFeeds: (feeds: string[]) =>
-    request<{ ok: boolean; feeds: string[]; note: string }>('/mqtt/subscribe', {
-      method: 'POST',
+    request<{ ok: boolean; feeds: string[]; note: string }>("/mqtt/subscribe", {
+      method: "POST",
       body: JSON.stringify({ feeds }),
     }),
   publishCommand: (feed: string, value: unknown, optimisticSync = true) =>
     request<{ ok: boolean; topic: string; payload: string; note?: string }>(
-      '/mqtt/command',
+      "/mqtt/command",
       {
-      method: 'POST',
-      body: JSON.stringify({ feed, value, optimisticSync }),
+        method: "POST",
+        body: JSON.stringify({ feed, value, optimisticSync }),
       },
     ),
   simulateIncoming: (feed: string, value: unknown) =>
@@ -551,123 +660,121 @@ export const mqttApi = {
       feed: string;
       value: unknown;
       note?: string;
-    }>('/mqtt/simulate/incoming', {
-      method: 'POST',
+    }>("/mqtt/simulate/incoming", {
+      method: "POST",
       body: JSON.stringify({ feed, value }),
     }),
 };
 
-  // ── Analytics ─────────────────────────────────────────────────────────────
-  export type ApiAnalyticsSummary = {
-    range: { from: string | null; to: string | null };
-    batches: {
-      total: number;
-      success: number;
-      fail: number;
-      running: number;
-      successRate: number;
-      failRate: number;
-    };
-    machines: {
-      total: number;
-      active: number;
-      inactive: number;
-    };
-  };
-
-  export type ApiAnalyticsTrendPoint = {
-    date: string;
+// ── Analytics ─────────────────────────────────────────────────────────────
+export type ApiAnalyticsSummary = {
+  range: { from: string | null; to: string | null };
+  batches: {
     total: number;
     success: number;
     fail: number;
     running: number;
     successRate: number;
+    failRate: number;
   };
+  machines: {
+    total: number;
+    active: number;
+    inactive: number;
+  };
+};
 
-  export type ApiAnalyticsTrend = {
-    range: { from: string | null; to: string | null };
-    period?: 'day' | 'week' | 'month' | 'year';
-    status?: 'all' | 'success' | 'fail';
-    points: ApiAnalyticsTrendPoint[];
-    pagination?: ApiPagination;
-  };
+export type ApiAnalyticsTrendPoint = {
+  date: string;
+  total: number;
+  success: number;
+  fail: number;
+  running: number;
+  successRate: number;
+};
 
-  export type ApiAnalyticsHourlyPoint = {
-    hour: string;
-    avg: number;
-    samples: number;
-  };
+export type ApiAnalyticsTrend = {
+  range: { from: string | null; to: string | null };
+  period?: "day" | "week" | "month" | "year";
+  status?: "all" | "success" | "fail";
+  points: ApiAnalyticsTrendPoint[];
+  pagination?: ApiPagination;
+};
 
-  export type ApiAnalyticsHourly = {
-    metric: 'temperature' | 'humidity' | string;
-    range: { from: string | null; to: string | null };
-    points: ApiAnalyticsHourlyPoint[];
-  };
+export type ApiAnalyticsHourlyPoint = {
+  hour: string;
+  avg: number;
+  samples: number;
+};
 
-  type AnalyticsQuery = {
-    from?: string;
-    to?: string;
-    zoneId?: number;
-  };
+export type ApiAnalyticsHourly = {
+  metric: "temperature" | "humidity" | string;
+  range: { from: string | null; to: string | null };
+  points: ApiAnalyticsHourlyPoint[];
+};
 
-  const buildAnalyticsQuery = (query?: AnalyticsQuery) => {
-    const params = new URLSearchParams();
-    if (query?.from) params.set('from', query.from);
-    if (query?.to) params.set('to', query.to);
-    if (query?.zoneId) params.set('zoneId', String(query.zoneId));
-    return params.toString();
-  };
+type AnalyticsQuery = {
+  from?: string;
+  to?: string;
+  zoneId?: number;
+};
 
-  export type ApiAnalyticsMtbf = {
-    name: string;
-    subtitle: string;
-    risk: string;
-    riskColor: string;
-    progress: number;
-    progressColor: string;
-  };
+const buildAnalyticsQuery = (query?: AnalyticsQuery) => {
+  const params = new URLSearchParams();
+  if (query?.from) params.set("from", query.from);
+  if (query?.to) params.set("to", query.to);
+  if (query?.zoneId) params.set("zoneId", String(query.zoneId));
+  return params.toString();
+};
 
-  export const analyticsApi = {
-    getSummary: (query?: AnalyticsQuery) => {
-      const params = buildAnalyticsQuery(query);
-      return request<ApiAnalyticsSummary>(
-        `/analytics/summary${params ? `?${params}` : ''}`,
-      );
-    },
-    getTrend: (
-      query?:
-        | (AnalyticsQuery & {
-            period?: 'day' | 'week' | 'month' | 'year';
-            status?: 'all' | 'success' | 'fail';
-            page?: number;
-            pageSize?: number;
-          })
-        | undefined,
-    ) => {
-      const params = new URLSearchParams(buildAnalyticsQuery(query));
-      if (query?.period) params.set('period', query.period);
-      if (query?.status) params.set('status', query.status);
-      if (query?.page) params.set('page', String(query.page));
-      if (query?.pageSize) params.set('pageSize', String(query.pageSize));
-      const q = params.toString();
-      return request<ApiAnalyticsTrend>(
-        `/analytics/trend${q ? `?${q}` : ''}`,
-      );
-    },
-    getHourlyAvg: (
-      query?: AnalyticsQuery & { metric?: 'temperature' | 'humidity' },
-    ) => {
-      const params = new URLSearchParams(buildAnalyticsQuery(query));
-      if (query?.metric) params.set('metric', query.metric);
-      const q = params.toString();
-      return request<ApiAnalyticsHourly>(
-        `/analytics/hourly-avg${q ? `?${q}` : ''}`,
-      );
-    },
-    getMtbf: (query?: AnalyticsQuery) => {
-      const params = buildAnalyticsQuery(query);
-      return request<ApiAnalyticsMtbf[]>(
-        `/analytics/mtbf${params ? `?${params}` : ''}`,
-      );
-    },
-  };
+export type ApiAnalyticsMtbf = {
+  name: string;
+  subtitle: string;
+  risk: string;
+  riskColor: string;
+  progress: number;
+  progressColor: string;
+};
+
+export const analyticsApi = {
+  getSummary: (query?: AnalyticsQuery) => {
+    const params = buildAnalyticsQuery(query);
+    return request<ApiAnalyticsSummary>(
+      `/analytics/summary${params ? `?${params}` : ""}`,
+    );
+  },
+  getTrend: (
+    query?:
+      | (AnalyticsQuery & {
+          period?: "day" | "week" | "month" | "year";
+          status?: "all" | "success" | "fail";
+          page?: number;
+          pageSize?: number;
+        })
+      | undefined,
+  ) => {
+    const params = new URLSearchParams(buildAnalyticsQuery(query));
+    if (query?.period) params.set("period", query.period);
+    if (query?.status) params.set("status", query.status);
+    if (query?.page) params.set("page", String(query.page));
+    if (query?.pageSize) params.set("pageSize", String(query.pageSize));
+    const q = params.toString();
+    return request<ApiAnalyticsTrend>(`/analytics/trend${q ? `?${q}` : ""}`);
+  },
+  getHourlyAvg: (
+    query?: AnalyticsQuery & { metric?: "temperature" | "humidity" },
+  ) => {
+    const params = new URLSearchParams(buildAnalyticsQuery(query));
+    if (query?.metric) params.set("metric", query.metric);
+    const q = params.toString();
+    return request<ApiAnalyticsHourly>(
+      `/analytics/hourly-avg${q ? `?${q}` : ""}`,
+    );
+  },
+  getMtbf: (query?: AnalyticsQuery) => {
+    const params = buildAnalyticsQuery(query);
+    return request<ApiAnalyticsMtbf[]>(
+      `/analytics/mtbf${params ? `?${params}` : ""}`,
+    );
+  },
+};

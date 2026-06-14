@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
-import dayjs from 'dayjs';
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import dayjs from "dayjs";
 import {
   Alert,
   App,
@@ -21,10 +21,12 @@ import {
   Slider,
   Space,
   Statistic,
+  Modal,
   Switch,
   Tag,
   Typography,
-} from 'antd';
+  Tooltip,
+} from "antd";
 import {
   ArrowLeftOutlined,
   BellOutlined,
@@ -39,7 +41,7 @@ import {
   ThunderboltOutlined,
   ToolOutlined,
   WarningOutlined,
-} from '@ant-design/icons';
+} from "@ant-design/icons";
 import {
   CartesianGrid,
   Legend,
@@ -49,13 +51,13 @@ import {
   Tooltip as ReTooltip,
   XAxis,
   YAxis,
-} from 'recharts';
-import { useOperatorContext } from '@/features/operator/model/operator-context';
-import { AIO_THRESHOLDS } from '@/features/operator/adafruit/config/adafruit-config';
-import { resolveConfiguredMachineFeeds } from '@/features/operator/adafruit/config/adafruit-config';
-import { useAdafruitIO } from '@/features/operator/adafruit/model/use-adafruit-io';
-import { OperatingModeToggle } from '@/features/operator/dashboard/ui/OperatingModeToggle';
-import { batchesApi, mqttApi, systemConfigApi } from '@/shared/lib/api';
+} from "recharts";
+import { useOperatorContext } from "@/features/operator/model/operator-context";
+import { AIO_THRESHOLDS } from "@/features/operator/adafruit/config/adafruit-config";
+import { resolveConfiguredMachineFeeds } from "@/features/operator/adafruit/config/adafruit-config";
+import { useAdafruitIO } from "@/features/operator/adafruit/model/use-adafruit-io";
+import { OperatingModeToggle } from "@/features/operator/dashboard/ui/OperatingModeToggle";
+import { batchesApi, mqttApi, systemConfigApi } from "@/shared/lib/api";
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -73,13 +75,21 @@ type StageSetpoint = {
 
 type CompletionNotice = {
   batchId: number;
-  type: 'success' | 'info' | 'warning' | 'error';
+  type: "success" | "info" | "warning" | "error";
   message: string;
   description: string;
 };
 
-type PanelMode = 'overview' | 'sensors' | 'actuators' | 'rules';
-type ActuatorFilter = 'all' | 'fan' | 'pump' | 'led' | 'lcd' | 'heater' | 'humidifier' | 'other';
+type PanelMode = "overview" | "sensors" | "actuators" | "rules";
+type ActuatorFilter =
+  | "all"
+  | "fan"
+  | "pump"
+  | "led"
+  | "lcd"
+  | "heater"
+  | "humidifier"
+  | "other";
 
 type SensorNode = {
   key: string;
@@ -101,16 +111,15 @@ type ActuatorNode = {
   updatedAt: string | null;
 };
 
-type ActuatorKind = Exclude<ActuatorFilter, 'all'>;
+type ActuatorKind = Exclude<ActuatorFilter, "all">;
 
-type DynamicControlComparator = 'gte' | 'lte';
+type DynamicControlComparator = "gte" | "lte";
 type DynamicFanComparator = DynamicControlComparator;
-
 
 type DynamicFanRule = {
   id: string;
   enabled: boolean;
-  category: 'critical' | 'normal';
+  category: "critical" | "normal";
   sensorFeed: string;
   comparator: DynamicFanComparator;
   threshold: number;
@@ -120,7 +129,6 @@ type DynamicFanRule = {
   priority: number;
   cooldownMs: number;
 };
-
 
 type DynamicFanRuleDraft = {
   sensorFeed: string;
@@ -133,7 +141,7 @@ type DynamicFanRuleDraft = {
   cooldownMs: number;
 };
 
-type DynamicControlGroupOperator = 'AND' | 'OR';
+type DynamicControlGroupOperator = "AND" | "OR";
 type DynamicFanGroupOperator = DynamicControlGroupOperator;
 
 type DynamicControlGroupCondition = {
@@ -150,7 +158,6 @@ type DynamicFanGroupOutput = {
   fanLevelOff: number;
 };
 
-
 type DynamicFanGroupRule = {
   id: string;
   enabled: boolean;
@@ -161,12 +168,9 @@ type DynamicFanGroupRule = {
   cooldownMs: number;
 };
 
-
 type DynamicFanGroupDraft = {
   operator: DynamicFanGroupOperator;
-  sensorFeed: string;
-  comparator: DynamicFanComparator;
-  threshold: number;
+  conditions: DynamicFanGroupCondition[];
   fanFeed: string;
   fanLevelOn: number;
   fanLevelOff: number;
@@ -189,47 +193,50 @@ function inferDeviceId(machineCode: string): number | null {
 }
 
 function normalizeFeedName(feed: string): string {
-  return feed.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return feed.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-type StatusKey = 'Running' | 'Idle' | 'Error' | 'Maintenance';
+type StatusKey = "Running" | "Idle" | "Error" | "Maintenance";
 
-const statusCfg: Record<StatusKey, { text: string; tagColor: 'success' | 'default' | 'error' | 'warning' }> = {
-  Running: { text: 'Đang chạy', tagColor: 'success' },
-  Idle: { text: 'Đang chờ', tagColor: 'default' },
-  Error: { text: 'Lỗi', tagColor: 'error' },
-  Maintenance: { text: 'Bảo trì', tagColor: 'warning' },
+const statusCfg: Record<
+  StatusKey,
+  { text: string; tagColor: "success" | "default" | "error" | "warning" }
+> = {
+  Running: { text: "Đang chạy", tagColor: "success" },
+  Idle: { text: "Đang chờ", tagColor: "default" },
+  Error: { text: "Lỗi", tagColor: "error" },
+  Maintenance: { text: "Bảo trì", tagColor: "warning" },
 };
 
 function toSensorUnit(sensorType: string) {
-  const type = String(sensorType ?? '').toLowerCase();
-  if (type.includes('temp')) return '°C';
-  if (type.includes('humid')) return '%';
-  if (type.includes('light') || type.includes('lux')) return 'lux';
-  if (type.includes('fan')) return '%';
-  return '';
+  const type = String(sensorType ?? "").toLowerCase();
+  if (type.includes("temp")) return "°C";
+  if (type.includes("humid")) return "%";
+  if (type.includes("light") || type.includes("lux")) return "lux";
+  if (type.includes("fan")) return "%";
+  return "";
 }
 
 function toSensorLabel(sensorType: string) {
-  const type = String(sensorType ?? '').toLowerCase();
-  if (type.includes('temp')) return 'Nhiệt độ';
-  if (type.includes('humid')) return 'Độ ẩm';
-  if (type.includes('light') || type.includes('lux')) return 'Ánh sáng';
-  if (type.includes('fan')) return 'Quạt';
-  if (type.includes('lcd')) return 'LCD';
-  if (type.includes('led')) return 'LED';
-  return sensorType || 'Sensor';
+  const type = String(sensorType ?? "").toLowerCase();
+  if (type.includes("temp")) return "Nhiệt độ";
+  if (type.includes("humid")) return "Độ ẩm";
+  if (type.includes("light") || type.includes("lux")) return "Ánh sáng";
+  if (type.includes("fan")) return "Quạt";
+  if (type.includes("lcd")) return "LCD";
+  if (type.includes("led")) return "LED";
+  return sensorType || "Sensor";
 }
 
 function getActuatorKind(actuatorType: string): ActuatorKind {
-  const type = String(actuatorType ?? '').toLowerCase();
-  if (type.includes('fan')) return 'fan';
-  if (type.includes('pump')) return 'pump';
-  if (type.includes('led')) return 'led';
-  if (type.includes('lcd')) return 'lcd';
-  if (type.includes('heater')) return 'heater';
-  if (type.includes('humidifier')) return 'humidifier';
-  return 'other';
+  const type = String(actuatorType ?? "").toLowerCase();
+  if (type.includes("fan")) return "fan";
+  if (type.includes("pump")) return "pump";
+  if (type.includes("led")) return "led";
+  if (type.includes("lcd")) return "lcd";
+  if (type.includes("heater")) return "heater";
+  if (type.includes("humidifier")) return "humidifier";
+  return "other";
 }
 
 function coerceNumericValue(value: unknown): number | null {
@@ -239,9 +246,9 @@ function coerceNumericValue(value: unknown): number | null {
 
 function coerceSwitchValue(value: unknown): boolean {
   if (value === true || value === 1) return true;
-  if (typeof value === 'string') {
+  if (typeof value === "string") {
     const normalized = value.trim().toUpperCase();
-    return normalized === '1' || normalized === 'ON' || normalized === 'TRUE';
+    return normalized === "1" || normalized === "ON" || normalized === "TRUE";
   }
   const numeric = Number(value);
   return Number.isFinite(numeric) && numeric > 0;
@@ -255,40 +262,56 @@ export default function OperatorMachineDetailPage() {
   const [nowSnapshot, setNowSnapshot] = useState<number>(() => Date.now());
   const [selectedRecipeId, setSelectedRecipeId] = useState<number | null>(null);
   const [heatLossDetected, setHeatLossDetected] = useState(false);
-  const [operatingMode, setOperatingMode] = useState<'auto' | 'manual'>('auto');
+  const [operatingMode, setOperatingMode] = useState<"auto" | "manual">("auto");
   const [manualTempSetpoint, setManualTempSetpoint] = useState(60);
   const [manualHumiditySetpoint, setManualHumiditySetpoint] = useState(45);
   const [savingSetpoint, setSavingSetpoint] = useState(false);
   const [activeBatchId, setActiveBatchId] = useState<number | null>(null);
-  const [activeBatchStartedAt, setActiveBatchStartedAt] = useState<string | null>(null);
-  const [activeBatchTotalMinutes, setActiveBatchTotalMinutes] = useState<number | null>(null);
-  const [currentBatchStage, setCurrentBatchStage] = useState<number | null>(null);
-  const [currentStageSetpoint, setCurrentStageSetpoint] = useState<StageSetpoint | null>(null);
-  const [pendingManualStageOrder, setPendingManualStageOrder] = useState<number | null>(null);
-  const [completionNotice, setCompletionNotice] = useState<CompletionNotice | null>(null);
-  const [panelMode, setPanelMode] = useState<PanelMode>('overview');
-  const [actuatorFilter, setActuatorFilter] = useState<ActuatorFilter>('all');
-  const [actuatorBusyMap, setActuatorBusyMap] = useState<Record<string, boolean>>({});
-  const [actuatorLevelDraftMap, setActuatorLevelDraftMap] = useState<Record<string, number>>({});
-  const [lcdDraftByFeed, setLcdDraftByFeed] = useState<Record<string, string>>({});
+  const [activeBatchStartedAt, setActiveBatchStartedAt] = useState<
+    string | null
+  >(null);
+  const [activeBatchTotalMinutes, setActiveBatchTotalMinutes] = useState<
+    number | null
+  >(null);
+  const [currentBatchStage, setCurrentBatchStage] = useState<number | null>(
+    null,
+  );
+  const [currentStageSetpoint, setCurrentStageSetpoint] =
+    useState<StageSetpoint | null>(null);
+  const [pendingManualStageOrder, setPendingManualStageOrder] = useState<
+    number | null
+  >(null);
+  const [completionNotice, setCompletionNotice] =
+    useState<CompletionNotice | null>(null);
+  const [panelMode, setPanelMode] = useState<PanelMode>("overview");
+  const [actuatorFilter, setActuatorFilter] = useState<ActuatorFilter>("all");
+  const [actuatorBusyMap, setActuatorBusyMap] = useState<
+    Record<string, boolean>
+  >({});
+  const [actuatorLevelDraftMap, setActuatorLevelDraftMap] = useState<
+    Record<string, number>
+  >({});
+  const [lcdDraftByFeed, setLcdDraftByFeed] = useState<Record<string, string>>(
+    {},
+  );
   const [dynamicFanRules, setDynamicFanRules] = useState<DynamicFanRule[]>([]);
   const [ruleDraft, setRuleDraft] = useState<DynamicFanRuleDraft>({
-    sensorFeed: '',
-    comparator: 'gte',
+    sensorFeed: "",
+    comparator: "gte",
     threshold: 60,
-    fanFeed: '',
+    fanFeed: "",
     fanLevelOn: 70,
     fanLevelOff: 0,
     priority: 1000,
     cooldownMs: 2000,
   });
-  const [dynamicFanGroups, setDynamicFanGroups] = useState<DynamicFanGroupRule[]>([]);
+  const [dynamicFanGroups, setDynamicFanGroups] = useState<
+    DynamicFanGroupRule[]
+  >([]);
   const [groupDraft, setGroupDraft] = useState<DynamicFanGroupDraft>({
-    operator: 'AND',
-    sensorFeed: '',
-    comparator: 'gte',
-    threshold: 60,
-    fanFeed: '',
+    operator: "AND",
+    conditions: [{ sensorFeed: "", comparator: "gte", threshold: 60 }],
+    fanFeed: "",
     fanLevelOn: 70,
     fanLevelOff: 0,
     priority: 200,
@@ -351,7 +374,7 @@ export default function OperatorMachineDetailPage() {
   const configuredFeedKeys = useMemo(() => {
     return new Set(
       [...(machine?.sensorFeeds ?? [])]
-        .map((feed) => normalizeFeedName(String(feed ?? '').trim()))
+        .map((feed) => normalizeFeedName(String(feed ?? "").trim()))
         .filter(Boolean),
     );
   }, [machine?.sensorFeeds]);
@@ -378,16 +401,164 @@ export default function OperatorMachineDetailPage() {
     return false;
   };
 
-  const hasTemperatureFeed = hasFeed(['temp', 'temperature']);
-  const hasHumidityFeed = hasFeed(['humid', 'humidity']);
-  const hasLightFeed = hasFeed(['light', 'lux']);
-  const hasFanFeed = hasFeed(['fan']);
+  // Conflict simulation state
+  const [showConflictModal, setShowConflictModal] = useState(false);
+  const [conflictSimulationResult, setConflictSimulationResult] = useState<
+    {
+      fanFeed: string;
+      triggered: boolean;
+      source: string | null;
+      priority: number | null;
+      level: number | null;
+      note?: string;
+    }[]
+  >([]);
+
+  const simulateConflictResolution = () => {
+    // Evaluate rules and groups against current sensor state
+    const sensorValueFor = (feed: string) =>
+      valueFromSensorState([normalizeFeedName(feed)]) ?? null;
+
+    type Candidate = {
+      id: string;
+      fanFeed: string;
+      priority: number;
+      level: number;
+      source: string;
+    };
+
+    const candidates: Candidate[] = [];
+
+    // Individual rules
+    for (const r of dynamicFanRules.filter((r) => r.enabled)) {
+      const val = sensorValueFor(r.sensorFeed);
+      const triggered =
+        val !== null &&
+        (r.comparator === "lte" ? val <= r.threshold : val >= r.threshold);
+      if (triggered) {
+        candidates.push({
+          id: r.id,
+          fanFeed: r.fanFeed,
+          priority: r.priority,
+          level: r.fanLevelOn,
+          source: `Quy tắc: ${r.id}`,
+        });
+      }
+    }
+
+    // Groups
+    for (const g of dynamicFanGroups.filter((g) => g.enabled)) {
+      const conds = g.conditions.map((c) => {
+        const v = sensorValueFor(c.sensorFeed);
+        if (v === null) return false;
+        return c.comparator === "lte" ? v <= c.threshold : v >= c.threshold;
+      });
+      const ok =
+        g.operator === "AND" ? conds.every(Boolean) : conds.some(Boolean);
+      if (!ok) continue;
+      for (const out of g.outputs) {
+        candidates.push({
+          id: g.id,
+          fanFeed: out.fanFeed,
+          priority: g.priority,
+          level: out.fanLevelOn,
+          source: `Nhóm: ${g.id}`,
+        });
+      }
+    }
+
+    // Determine winning candidate per fanFeed
+    const byFeed = new Map<string, Candidate[]>();
+    for (const c of candidates) {
+      const arr = byFeed.get(c.fanFeed) ?? [];
+      arr.push(c);
+      byFeed.set(c.fanFeed, arr);
+    }
+
+    const results: {
+      fanFeed: string;
+      triggered: boolean;
+      source: string | null;
+      priority: number | null;
+      level: number | null;
+      note?: string;
+    }[] = [];
+
+    // Gather all known actuator feeds (excluding LCD) as base list
+    const actuatorFeeds = Array.from(
+      new Set(
+        actuatorNodes
+          .filter((n) => getActuatorKind(n.actuatorType) !== "lcd")
+          .map((n) => n.feed),
+      ),
+    );
+
+    for (const feed of actuatorFeeds) {
+      const list = byFeed.get(feed) ?? [];
+      if (list.length === 0) {
+        results.push({
+          fanFeed: feed,
+          triggered: false,
+          source: null,
+          priority: null,
+          level: null,
+        });
+        continue;
+      }
+
+      // choose highest priority
+      list.sort((a, b) => b.priority - a.priority);
+      const top = list[0];
+      const samePriority = list.filter((x) => x.priority === top.priority);
+      if (
+        samePriority.length > 1 &&
+        !conflictSettings.allowEqualPriorityTakeover
+      ) {
+        // conflict
+        results.push({
+          fanFeed: feed,
+          triggered: true,
+          source: null,
+          priority: top.priority,
+          level: null,
+          note: "Xung đột: nhiều quy tắc có cùng độ ưu tiên",
+        });
+      } else {
+        // if allow takeover, prefer max level among equals
+        const chosenLevel =
+          samePriority.length > 1
+            ? Math.max(...samePriority.map((s) => s.level))
+            : top.level;
+        const chosenSource =
+          samePriority.length > 1
+            ? samePriority.map((s) => s.source).join(",")
+            : top.source;
+        results.push({
+          fanFeed: feed,
+          triggered: true,
+          source: chosenSource,
+          priority: top.priority,
+          level: chosenLevel,
+        });
+      }
+    }
+
+    setConflictSimulationResult(results);
+    setShowConflictModal(true);
+  };
+
+  const hasTemperatureFeed = hasFeed(["temp", "temperature"]);
+  const hasHumidityFeed = hasFeed(["humid", "humidity"]);
+  const hasLightFeed = hasFeed(["light", "lux"]);
+  const hasFanFeed = hasFeed(["fan"]);
 
   const sensorNodes = useMemo<SensorNode[]>(() => {
     const rows = machine?.sensorState ?? [];
     const mapped = rows.map((row) => {
       const numeric = Number(row.value);
-      const value = Number.isFinite(numeric) ? Math.round(numeric * 10) / 10 : null;
+      const value = Number.isFinite(numeric)
+        ? Math.round(numeric * 10) / 10
+        : null;
       return {
         key: `${row.feed}-${row.sensorType}`,
         feed: row.feed,
@@ -403,19 +574,23 @@ export default function OperatorMachineDetailPage() {
 
     return [
       {
-        key: 'fallback-temp',
-        feed: 'temperature',
-        sensorType: 'temperature',
-        value: Number.isFinite(Number(sensor.temperature)) ? sensor.temperature : null,
-        unit: '°C',
+        key: "fallback-temp",
+        feed: "temperature",
+        sensorType: "temperature",
+        value: Number.isFinite(Number(sensor.temperature))
+          ? sensor.temperature
+          : null,
+        unit: "°C",
         updatedAt: null,
       },
       {
-        key: 'fallback-humidity',
-        feed: 'humidity',
-        sensorType: 'humidity',
-        value: Number.isFinite(Number(sensor.humidity)) ? sensor.humidity : null,
-        unit: '%',
+        key: "fallback-humidity",
+        feed: "humidity",
+        sensorType: "humidity",
+        value: Number.isFinite(Number(sensor.humidity))
+          ? sensor.humidity
+          : null,
+        unit: "%",
         updatedAt: null,
       },
     ];
@@ -431,9 +606,10 @@ export default function OperatorMachineDetailPage() {
 
     for (const row of sensorNodes) {
       const type = normalizeFeedName(row.sensorType);
-      if (type.includes('temp')) groups.temperature.push(row);
-      else if (type.includes('humid')) groups.humidity.push(row);
-      else if (type.includes('light') || type.includes('lux')) groups.light.push(row);
+      if (type.includes("temp")) groups.temperature.push(row);
+      else if (type.includes("humid")) groups.humidity.push(row);
+      else if (type.includes("light") || type.includes("lux"))
+        groups.light.push(row);
       else groups.other.push(row);
     }
 
@@ -441,7 +617,9 @@ export default function OperatorMachineDetailPage() {
   }, [sensorNodes]);
 
   const fanNodes = useMemo(() => {
-    const fromSensors = sensorNodes.filter((row) => normalizeFeedName(row.feed).includes('fan'));
+    const fromSensors = sensorNodes.filter((row) =>
+      normalizeFeedName(row.feed).includes("fan"),
+    );
     if (fromSensors.length > 0) {
       return fromSensors.map((row, index) => ({
         key: row.key,
@@ -455,9 +633,9 @@ export default function OperatorMachineDetailPage() {
     if (hasFanFeed) {
       return [
         {
-          key: 'primary-fan',
-          name: 'Quạt chính',
-          feed: feeds?.fanLevel || 'fan-primary',
+          key: "primary-fan",
+          name: "Quạt chính",
+          feed: feeds?.fanLevel || "fan-primary",
           level: Number(output.fanLevel),
           updatedAt: null,
         },
@@ -482,7 +660,14 @@ export default function OperatorMachineDetailPage() {
     }
 
     // Fallback: tìm từ sensorState có type là actuator-like
-    const ACTUATOR_TYPES = ['fan', 'led', 'lcd', 'pump', 'heater', 'humidifier'];
+    const ACTUATOR_TYPES = [
+      "fan",
+      "led",
+      "lcd",
+      "pump",
+      "heater",
+      "humidifier",
+    ];
     const isActuator = (type: string) =>
       ACTUATOR_TYPES.some((t) => String(type).toLowerCase().includes(t));
 
@@ -503,7 +688,7 @@ export default function OperatorMachineDetailPage() {
       key: fan.key,
       feed: fan.feed,
       actuatorName: fan.name,
-      actuatorType: 'Fan',
+      actuatorType: "Fan",
       value: fan.level,
       updatedAt: fan.updatedAt,
     }));
@@ -511,13 +696,20 @@ export default function OperatorMachineDetailPage() {
 
   /** Options cho rule: chấp hành mục tiêu */
   const actuatorRuleOptions = useMemo(() => {
-    const feeds = Array.from(
-      new Set(actuatorNodes.map((node) => node.feed).filter(Boolean)),
+    const filtered = actuatorNodes.filter(
+      (node) => getActuatorKind(node.actuatorType) !== "lcd",
     );
-    return feeds.map((feed) => ({
-      value: feed,
-      label: `${feed}`,
-    }));
+    const feeds = Array.from(
+      new Set(filtered.map((node) => node.feed).filter(Boolean)),
+    );
+    return feeds.map((feed) => {
+      const node = filtered.find((n) => n.feed === feed);
+      const label = node ? `${node.actuatorName || node.actuatorType} · ${feed}` : feed;
+      return {
+        value: feed,
+        label,
+      };
+    });
   }, [actuatorNodes]);
 
   const groupedActuatorNodes = useMemo(() => {
@@ -539,8 +731,10 @@ export default function OperatorMachineDetailPage() {
   }, [actuatorNodes]);
 
   const filteredActuatorNodes = useMemo(() => {
-    if (actuatorFilter === 'all') return actuatorNodes;
-    return actuatorNodes.filter((node) => getActuatorKind(node.actuatorType) === actuatorFilter);
+    if (actuatorFilter === "all") return actuatorNodes;
+    return actuatorNodes.filter(
+      (node) => getActuatorKind(node.actuatorType) === actuatorFilter,
+    );
   }, [actuatorFilter, actuatorNodes]);
 
   const groupedFilteredActuatorNodes = useMemo(() => {
@@ -576,7 +770,7 @@ export default function OperatorMachineDetailPage() {
       const next = { ...prev };
       for (const node of actuatorNodes) {
         const kind = getActuatorKind(node.actuatorType);
-        if (kind !== 'fan') continue;
+        if (kind !== "fan") continue;
         if (next[node.feed] !== undefined) continue;
         const numeric = coerceNumericValue(node.value);
         next[node.feed] = Math.max(0, Math.min(100, Math.round(numeric ?? 0)));
@@ -588,9 +782,9 @@ export default function OperatorMachineDetailPage() {
       const next = { ...prev };
       for (const node of actuatorNodes) {
         const kind = getActuatorKind(node.actuatorType);
-        if (kind !== 'lcd') continue;
+        if (kind !== "lcd") continue;
         if (next[node.feed] !== undefined) continue;
-        next[node.feed] = typeof node.value === 'string' ? node.value : '';
+        next[node.feed] = typeof node.value === "string" ? node.value : "";
       }
       return next;
     });
@@ -598,7 +792,7 @@ export default function OperatorMachineDetailPage() {
 
   const healthyTemperatureValues = useMemo(() => {
     return sensorNodes
-      .filter((row) => normalizeFeedName(row.sensorType).includes('temp'))
+      .filter((row) => normalizeFeedName(row.sensorType).includes("temp"))
       .filter(
         (row) =>
           Number.isFinite(row.value) &&
@@ -613,16 +807,18 @@ export default function OperatorMachineDetailPage() {
 
   const averageTemperature = useMemo(() => {
     if (healthyTemperatureValues.length === 0) return null;
-    return Math.round(
-      (healthyTemperatureValues.reduce((sum, current) => sum + current, 0) /
-        healthyTemperatureValues.length) *
-        10,
-    ) / 10;
+    return (
+      Math.round(
+        (healthyTemperatureValues.reduce((sum, current) => sum + current, 0) /
+          healthyTemperatureValues.length) *
+          10,
+      ) / 10
+    );
   }, [healthyTemperatureValues]);
 
   const faultyTemperatureCount = useMemo(() => {
     return sensorNodes.filter((row) => {
-      if (!normalizeFeedName(row.sensorType).includes('temp')) return false;
+      if (!normalizeFeedName(row.sensorType).includes("temp")) return false;
       if (!Number.isFinite(row.value)) return false;
       return (
         (row.value as number) < SENSOR_FAULT_TEMP_MIN ||
@@ -633,17 +829,18 @@ export default function OperatorMachineDetailPage() {
 
   const criticalTemperatureCount = useMemo(() => {
     return sensorNodes.filter((row) => {
-      if (!normalizeFeedName(row.sensorType).includes('temp')) return false;
+      if (!normalizeFeedName(row.sensorType).includes("temp")) return false;
       if (!Number.isFinite(row.value)) return false;
       const value = row.value as number;
-      if (value < SENSOR_FAULT_TEMP_MIN || value > SENSOR_FAULT_TEMP_MAX) return false;
+      if (value < SENSOR_FAULT_TEMP_MIN || value > SENSOR_FAULT_TEMP_MAX)
+        return false;
       return value > maxTempSafeThreshold;
     }).length;
   }, [maxTempSafeThreshold, sensorNodes]);
 
   const humidityValues = useMemo(() => {
     return sensorNodes
-      .filter((row) => normalizeFeedName(row.sensorType).includes('humid'))
+      .filter((row) => normalizeFeedName(row.sensorType).includes("humid"))
       .map((row) => row.value)
       .filter((value): value is number => Number.isFinite(value));
   }, [sensorNodes]);
@@ -652,15 +849,23 @@ export default function OperatorMachineDetailPage() {
 
   const averageHumidity = useMemo(() => {
     if (humidityValues.length === 0) return null;
-    return Math.round((humidityValues.reduce((sum, current) => sum + current, 0) / humidityValues.length) * 10) / 10;
+    return (
+      Math.round(
+        (humidityValues.reduce((sum, current) => sum + current, 0) /
+          humidityValues.length) *
+          10,
+      ) / 10
+    );
   }, [humidityValues]);
+
+
 
   const sensorRuleOptions = useMemo(
     () =>
       sensorNodes
         .filter((row) => {
           const normalized = normalizeFeedName(row.feed);
-          return !normalized.includes('fan') && row.value !== null;
+          return !normalized.includes("fan") && row.value !== null;
         })
         .map((row) => ({
           value: row.feed,
@@ -670,7 +875,9 @@ export default function OperatorMachineDetailPage() {
   );
 
   const fanRuleOptions = useMemo(() => {
-    const feeds = Array.from(new Set(fanNodes.map((node) => node.feed).filter(Boolean)));
+    const feeds = Array.from(
+      new Set(fanNodes.map((node) => node.feed).filter(Boolean)),
+    );
     return feeds.map((feed, index) => ({
       value: feed,
       label: `Quạt ${index + 1} · ${feed}`,
@@ -685,31 +892,40 @@ export default function OperatorMachineDetailPage() {
       if (!Array.isArray(parsed)) return [];
       return parsed
         .map((row, index) => {
-          if (!row || typeof row !== 'object') return null;
+          if (!row || typeof row !== "object") return null;
           const rule = row as Partial<DynamicFanRule>;
-          const comparator: DynamicFanComparator = rule.comparator === 'lte' ? 'lte' : 'gte';
+          const comparator: DynamicFanComparator =
+            rule.comparator === "lte" ? "lte" : "gte";
           const threshold = Number(rule.threshold);
           const fanLevelOn = Number(rule.fanLevelOn);
           const fanLevelOff = Number(rule.fanLevelOff);
           const priority = Number(rule.priority);
           const cooldownMs = Number(rule.cooldownMs);
-          const categoryRaw = String(rule.category ?? 'critical').toLowerCase();
-          const sensorFeed = String(rule.sensorFeed ?? '').trim();
-          const fanFeed = String(rule.fanFeed ?? '').trim();
+          const categoryRaw = String(rule.category ?? "critical").toLowerCase();
+          const sensorFeed = String(rule.sensorFeed ?? "").trim();
+          const fanFeed = String(rule.fanFeed ?? "").trim();
           if (!sensorFeed || !fanFeed) return null;
 
           return {
             id: String(rule.id ?? `rule-${index + 1}`),
             enabled: Boolean(rule.enabled),
-            category: categoryRaw === 'critical' ? 'critical' : 'normal',
+            category: categoryRaw === "critical" ? "critical" : "normal",
             sensorFeed,
             comparator,
             threshold: Number.isFinite(threshold) ? threshold : 0,
             fanFeed,
-            fanLevelOn: Number.isFinite(fanLevelOn) ? Math.max(0, Math.min(100, fanLevelOn)) : 70,
-            fanLevelOff: Number.isFinite(fanLevelOff) ? Math.max(0, Math.min(100, fanLevelOff)) : 0,
-            priority: Number.isFinite(priority) ? Math.max(0, Math.round(priority)) : 1000,
-            cooldownMs: Number.isFinite(cooldownMs) ? Math.max(0, Math.round(cooldownMs)) : 2000,
+            fanLevelOn: Number.isFinite(fanLevelOn)
+              ? Math.max(0, Math.min(100, fanLevelOn))
+              : 70,
+            fanLevelOff: Number.isFinite(fanLevelOff)
+              ? Math.max(0, Math.min(100, fanLevelOff))
+              : 0,
+            priority: Number.isFinite(priority)
+              ? Math.max(0, Math.round(priority))
+              : 1000,
+            cooldownMs: Number.isFinite(cooldownMs)
+              ? Math.max(0, Math.round(cooldownMs))
+              : 2000,
           } as DynamicFanRule;
         })
         .filter((rule): rule is DynamicFanRule => Boolean(rule));
@@ -718,7 +934,9 @@ export default function OperatorMachineDetailPage() {
     }
   };
 
-  const parseDynamicGroups = (raw: string | undefined): DynamicFanGroupRule[] => {
+  const parseDynamicGroups = (
+    raw: string | undefined,
+  ): DynamicFanGroupRule[] => {
     if (!raw) return [];
 
     try {
@@ -726,41 +944,49 @@ export default function OperatorMachineDetailPage() {
       if (!Array.isArray(parsed)) return [];
       return parsed
         .map((row, index) => {
-          if (!row || typeof row !== 'object') return null;
+          if (!row || typeof row !== "object") return null;
           const group = row as Partial<DynamicFanGroupRule>;
           const conditions = Array.isArray(group.conditions)
             ? group.conditions
                 .map((condition) => {
-                  if (!condition || typeof condition !== 'object') return null;
+                  if (!condition || typeof condition !== "object") return null;
                   const c = condition as Partial<DynamicFanGroupCondition>;
-                  const sensorFeed = String(c.sensorFeed ?? '').trim();
+                  const sensorFeed = String(c.sensorFeed ?? "").trim();
                   if (!sensorFeed) return null;
                   const threshold = Number(c.threshold);
                   return {
                     sensorFeed,
-                    comparator: c.comparator === 'lte' ? 'lte' : 'gte',
+                    comparator: c.comparator === "lte" ? "lte" : "gte",
                     threshold: Number.isFinite(threshold) ? threshold : 0,
                   } as DynamicFanGroupCondition;
                 })
-                .filter((condition): condition is DynamicFanGroupCondition => Boolean(condition))
+                .filter((condition): condition is DynamicFanGroupCondition =>
+                  Boolean(condition),
+                )
             : [];
 
           const outputs = Array.isArray(group.outputs)
             ? group.outputs
                 .map((output) => {
-                  if (!output || typeof output !== 'object') return null;
+                  if (!output || typeof output !== "object") return null;
                   const o = output as Partial<DynamicFanGroupOutput>;
-                  const fanFeed = String(o.fanFeed ?? '').trim();
+                  const fanFeed = String(o.fanFeed ?? "").trim();
                   if (!fanFeed) return null;
                   const on = Number(o.fanLevelOn);
                   const off = Number(o.fanLevelOff);
                   return {
                     fanFeed,
-                    fanLevelOn: Number.isFinite(on) ? Math.max(0, Math.min(100, on)) : 70,
-                    fanLevelOff: Number.isFinite(off) ? Math.max(0, Math.min(100, off)) : 0,
+                    fanLevelOn: Number.isFinite(on)
+                      ? Math.max(0, Math.min(100, on))
+                      : 70,
+                    fanLevelOff: Number.isFinite(off)
+                      ? Math.max(0, Math.min(100, off))
+                      : 0,
                   } as DynamicFanGroupOutput;
                 })
-                .filter((output): output is DynamicFanGroupOutput => Boolean(output))
+                .filter((output): output is DynamicFanGroupOutput =>
+                  Boolean(output),
+                )
             : [];
 
           if (conditions.length === 0 || outputs.length === 0) return null;
@@ -771,11 +997,15 @@ export default function OperatorMachineDetailPage() {
           return {
             id: String(group.id ?? `group-${index + 1}`),
             enabled: Boolean(group.enabled),
-            operator: group.operator === 'AND' ? 'AND' : 'OR',
+            operator: group.operator === "AND" ? "AND" : "OR",
             conditions,
             outputs,
-            priority: Number.isFinite(priority) ? Math.max(0, Math.round(priority)) : 200,
-            cooldownMs: Number.isFinite(cooldownMs) ? Math.max(0, Math.round(cooldownMs)) : 8000,
+            priority: Number.isFinite(priority)
+              ? Math.max(0, Math.round(priority))
+              : 200,
+            cooldownMs: Number.isFinite(cooldownMs)
+              ? Math.max(0, Math.round(cooldownMs))
+              : 8000,
           } as DynamicFanGroupRule;
         })
         .filter((group): group is DynamicFanGroupRule => Boolean(group));
@@ -795,13 +1025,13 @@ export default function OperatorMachineDetailPage() {
   };
 
   const effectiveTemperature = hasTemperatureFeed
-    ? (valueFromSensorState(['temp', 'temperature']) ?? sensor.temperature)
+    ? (valueFromSensorState(["temp", "temperature"]) ?? sensor.temperature)
     : null;
   const effectiveHumidity = hasHumidityFeed
-    ? (valueFromSensorState(['humid', 'humidity']) ?? sensor.humidity)
+    ? (valueFromSensorState(["humid", "humidity"]) ?? sensor.humidity)
     : null;
   const effectiveLight = hasLightFeed
-    ? (valueFromSensorState(['light', 'lux']) ?? sensor.light)
+    ? (valueFromSensorState(["light", "lux"]) ?? sensor.light)
     : null;
 
   const elapsedMsSnapshot = (() => {
@@ -813,7 +1043,7 @@ export default function OperatorMachineDetailPage() {
     }
 
     if (!machine?.startTime) return 0;
-    const [h, m] = machine.startTime.split(':').map(Number);
+    const [h, m] = machine.startTime.split(":").map(Number);
     if (!Number.isFinite(h) || !Number.isFinite(m)) return 0;
 
     const startedAt = new Date();
@@ -827,13 +1057,14 @@ export default function OperatorMachineDetailPage() {
   })();
 
   const elapsed = (() => {
-    if (elapsedMsSnapshot <= 0) return '--';
+    if (elapsedMsSnapshot <= 0) return "--";
     const dh = Math.floor(elapsedMsSnapshot / 3600000);
     const dm = Math.floor((elapsedMsSnapshot % 3600000) / 60000);
     return `${dh}h ${dm}m`;
   })();
 
-  const effectiveSelectedRecipeId = selectedRecipeId ?? machine?.recipeId ?? null;
+  const effectiveSelectedRecipeId =
+    selectedRecipeId ?? machine?.recipeId ?? null;
 
   const selectedRecipe = useMemo(
     () => recipes.find((recipe) => recipe.id === effectiveSelectedRecipeId),
@@ -852,21 +1083,46 @@ export default function OperatorMachineDetailPage() {
         : activeRecipe?.duration;
 
     if (!totalMinutes) {
-      return typeof machine?.progress === 'number' ? machine.progress : undefined;
+      return typeof machine?.progress === "number"
+        ? machine.progress
+        : undefined;
     }
 
     const elapsedMs = elapsedMsSnapshot;
     if (elapsedMs <= 0) return 0;
 
     const durationMs = totalMinutes * 60 * 1000;
-    if (durationMs <= 0) return typeof machine?.progress === 'number' ? machine.progress : undefined;
+    if (durationMs <= 0)
+      return typeof machine?.progress === "number"
+        ? machine.progress
+        : undefined;
 
-    return Math.max(0, Math.min(100, Math.round((elapsedMs / durationMs) * 100)));
-  }, [activeBatchTotalMinutes, activeRecipe?.duration, elapsedMsSnapshot, machine?.progress]);
+    return Math.max(
+      0,
+      Math.min(100, Math.round((elapsedMs / durationMs) * 100)),
+    );
+  }, [
+    activeBatchTotalMinutes,
+    activeRecipe?.duration,
+    elapsedMsSnapshot,
+    machine?.progress,
+  ]);
 
   const doorOpenByLux =
     hasLightFeed && effectiveLight !== null && effectiveLight > DOOR_OPEN_LUX;
-  const isManualMode = operatingMode === 'manual';
+
+  const lcdAverageMessage = useMemo(() => {
+    const temperatureText =
+      averageTemperature !== null ? `${averageTemperature.toFixed(1)}°C` : "--";
+    const humidityText =
+      averageHumidity !== null ? `${averageHumidity.toFixed(1)}%` : "--";
+    const doorText = hasLightFeed ? (doorOpenByLux ? "Mở" : "Đóng") : "N/A";
+
+    return `T: ${temperatureText} H: ${humidityText}\nDoor: ${doorText}`;
+  }, [averageHumidity, averageTemperature, doorOpenByLux, hasLightFeed]);
+
+  const isMachineUnderMaintenance = machine?.status === "Maintenance";
+  const isManualMode = operatingMode === "manual" && !isMachineUnderMaintenance;
 
   const recipeTempSetpoint = selectedRecipe?.temp ?? activeRecipe?.temp ?? null;
   const recipeHumiditySetpoint =
@@ -899,7 +1155,7 @@ export default function OperatorMachineDetailPage() {
       ? Math.max(0, effectiveHumidity - autoHumiditySetpoint)
       : 0;
   const manualFormulaExceeded =
-    machine?.status === 'Running' &&
+    machine?.status === "Running" &&
     (manualTempExceedDelta > 0 || manualHumidityExceedDelta > 0);
 
   const manualRecommendedFanLevel = Math.max(
@@ -937,12 +1193,17 @@ export default function OperatorMachineDetailPage() {
     if (!deviceId) return;
 
     let mounted = true;
-    const runningStatuses = new Set(['Running', 'InProgress', 'Active', 'Processing']);
+    const runningStatuses = new Set([
+      "Running",
+      "InProgress",
+      "Active",
+      "Processing",
+    ]);
 
     const syncBatchStage = async () => {
       try {
         const batchList = await batchesApi.getAll({
-          status: 'running',
+          status: "running",
           page: 1,
           pageSize: 100,
         });
@@ -951,7 +1212,7 @@ export default function OperatorMachineDetailPage() {
         const activeBatch = batchList.items.find(
           (batch) =>
             batch.deviceID === deviceId &&
-            runningStatuses.has(batch.batchStatus ?? ''),
+            runningStatuses.has(batch.batchStatus ?? ""),
         );
 
         if (!activeBatch) {
@@ -966,47 +1227,56 @@ export default function OperatorMachineDetailPage() {
               const completedBatch = await batchesApi.getOne(previousBatchId);
               if (!mounted) return;
 
-              const status = String(completedBatch.batchStatus ?? '').toLowerCase();
-              const result = String(completedBatch.batchResult ?? '').toLowerCase();
-              const mode = String(completedBatch.operationMode ?? '').toLowerCase();
+              const status = String(
+                completedBatch.batchStatus ?? "",
+              ).toLowerCase();
+              const result = String(
+                completedBatch.batchResult ?? "",
+              ).toLowerCase();
+              const mode = String(
+                completedBatch.operationMode ?? "",
+              ).toLowerCase();
               const isStoppedByOperator =
-                status === 'stopped' || result.includes('stoppedbyoperator');
+                status === "stopped" || result.includes("stoppedbyoperator");
 
               if (!isStoppedByOperator) {
-                const isManualCompletion = mode === 'manual';
-                const isFailed = status === 'fail' || result.includes('fail') || result.includes('error');
+                const isManualCompletion = mode === "manual";
+                const isFailed =
+                  status === "fail" ||
+                  result.includes("fail") ||
+                  result.includes("error");
 
                 let nextNotice: CompletionNotice;
                 if (isFailed) {
                   nextNotice = {
                     batchId: previousBatchId,
-                    type: 'error',
+                    type: "error",
                     message: `Mẻ #${previousBatchId} kết thúc với trạng thái lỗi`,
                     description:
-                      'Hệ thống ghi nhận mẻ chưa hoàn tất bình thường. Vui lòng kiểm tra cảnh báo, nhật ký và xác nhận điều kiện an toàn trước khi chạy mẻ mới.',
+                      "Hệ thống ghi nhận mẻ chưa hoàn tất bình thường. Vui lòng kiểm tra cảnh báo, nhật ký và xác nhận điều kiện an toàn trước khi chạy mẻ mới.",
                   };
                 } else if (isManualCompletion) {
                   nextNotice = {
                     batchId: previousBatchId,
-                    type: 'warning',
+                    type: "warning",
                     message: `Mẻ #${previousBatchId} đã hoàn thành ở chế độ Manual`,
                     description:
-                      'Vui lòng thực hiện hậu kiểm, xác nhận chất lượng và chốt mẻ trước khi chuyển sang lô tiếp theo.',
+                      "Vui lòng thực hiện hậu kiểm, xác nhận chất lượng và chốt mẻ trước khi chuyển sang lô tiếp theo.",
                   };
                 } else {
                   nextNotice = {
                     batchId: previousBatchId,
-                    type: 'success',
+                    type: "success",
                     message: `Mẻ #${previousBatchId} đã hoàn thành tự động`,
                     description:
-                      'Có thể bắt đầu bước lấy sản phẩm, làm nguội và chuẩn bị máy cho mẻ kế tiếp.',
+                      "Có thể bắt đầu bước lấy sản phẩm, làm nguội và chuẩn bị máy cho mẻ kế tiếp.",
                   };
                 }
 
                 setCompletionNotice(nextNotice);
-                if (nextNotice.type === 'warning') {
+                if (nextNotice.type === "warning") {
                   message.warning(nextNotice.message);
-                } else if (nextNotice.type === 'error') {
+                } else if (nextNotice.type === "error") {
                   message.error(nextNotice.message);
                 } else {
                   message.success(nextNotice.message);
@@ -1030,25 +1300,32 @@ export default function OperatorMachineDetailPage() {
         }
 
         setActiveBatchId(activeBatch.batchesID);
-  lastRunningBatchIdRef.current = activeBatch.batchesID;
+        lastRunningBatchIdRef.current = activeBatch.batchesID;
         const stageOrder = activeBatch.currentStage ?? null;
         setCurrentBatchStage(stageOrder);
 
         const detail = await batchesApi.getOne(activeBatch.batchesID);
         if (!mounted) return;
 
-        setActiveBatchStartedAt(detail.startedAt ?? activeBatch.startedAt ?? null);
+        setActiveBatchStartedAt(
+          detail.startedAt ?? activeBatch.startedAt ?? null,
+        );
 
         const stages = detail.recipe?.stages ?? [];
         const stageDurationMinutes = stages.reduce((sum, stage) => {
           const minutes = Number(stage.durationMinutes ?? 0);
           return Number.isFinite(minutes) ? sum + minutes : sum;
         }, 0);
-        const fallbackDurationMinutes = Number(detail.recipe?.timeDurationEst ?? 0);
+        const fallbackDurationMinutes = Number(
+          detail.recipe?.timeDurationEst ?? 0,
+        );
         const resolvedDurationMinutes =
-          stageDurationMinutes > 0 ? stageDurationMinutes : fallbackDurationMinutes;
+          stageDurationMinutes > 0
+            ? stageDurationMinutes
+            : fallbackDurationMinutes;
         setActiveBatchTotalMinutes(
-          Number.isFinite(resolvedDurationMinutes) && resolvedDurationMinutes > 0
+          Number.isFinite(resolvedDurationMinutes) &&
+            resolvedDurationMinutes > 0
             ? resolvedDurationMinutes
             : null,
         );
@@ -1106,7 +1383,7 @@ export default function OperatorMachineDetailPage() {
         const cfg = await systemConfigApi.getAll();
         if (!mounted) return;
 
-        const mode = (cfg.operatingMode ?? 'auto') as 'auto' | 'manual';
+        const mode = (cfg.operatingMode ?? "auto") as "auto" | "manual";
         setOperatingMode(mode);
 
         const temp = Number(cfg.manualTargetTemp);
@@ -1130,13 +1407,20 @@ export default function OperatorMachineDetailPage() {
         setDynamicFanGroups(loadedGroups);
         setConflictSettings({
           defaultCooldownMs: Number.isFinite(
-            Number(cfg['operatorFanRuleConflict.defaultCooldownMs']),
+            Number(cfg["operatorFanRuleConflict.defaultCooldownMs"]),
           )
-            ? Math.max(0, Math.round(Number(cfg['operatorFanRuleConflict.defaultCooldownMs'])))
+            ? Math.max(
+                0,
+                Math.round(
+                  Number(cfg["operatorFanRuleConflict.defaultCooldownMs"]),
+                ),
+              )
             : 5000,
           allowEqualPriorityTakeover:
-            String(cfg['operatorFanRuleConflict.allowEqualPriorityTakeover'] ?? 'false') ===
-            'true',
+            String(
+              cfg["operatorFanRuleConflict.allowEqualPriorityTakeover"] ??
+                "false",
+            ) === "true",
         });
       } catch {
         // Keep local defaults if config endpoint is temporarily unavailable.
@@ -1152,8 +1436,8 @@ export default function OperatorMachineDetailPage() {
 
   useEffect(() => {
     if (ruleDraft.sensorFeed) return;
-    const nextSensorFeed = sensorRuleOptions[0]?.value ?? '';
-    const nextFanFeed = fanRuleOptions[0]?.value ?? '';
+    const nextSensorFeed = sensorRuleOptions[0]?.value ?? "";
+    const nextFanFeed = fanRuleOptions[0]?.value ?? "";
     if (!nextSensorFeed && !nextFanFeed) return;
 
     setRuleDraft((prev) => ({
@@ -1164,17 +1448,25 @@ export default function OperatorMachineDetailPage() {
   }, [fanRuleOptions, ruleDraft.sensorFeed, sensorRuleOptions]);
 
   useEffect(() => {
-    if (groupDraft.sensorFeed) return;
-    const nextSensorFeed = sensorRuleOptions[0]?.value ?? '';
-    const nextFanFeed = fanRuleOptions[0]?.value ?? '';
+    const firstCond = groupDraft.conditions?.[0];
+    if (firstCond && firstCond.sensorFeed) return;
+    const nextSensorFeed = sensorRuleOptions[0]?.value ?? "";
+    const nextFanFeed = fanRuleOptions[0]?.value ?? "";
     if (!nextSensorFeed && !nextFanFeed) return;
 
     setGroupDraft((prev) => ({
       ...prev,
-      sensorFeed: prev.sensorFeed || nextSensorFeed,
+      conditions:
+        prev.conditions && prev.conditions.length > 0
+          ? prev.conditions.map((c, i) =>
+              i === 0
+                ? { ...c, sensorFeed: c.sensorFeed || nextSensorFeed }
+                : c,
+            )
+          : [{ sensorFeed: nextSensorFeed, comparator: "gte", threshold: 60 }],
       fanFeed: prev.fanFeed || nextFanFeed,
     }));
-  }, [fanRuleOptions, groupDraft.sensorFeed, sensorRuleOptions]);
+  }, [fanRuleOptions, groupDraft.conditions, sensorRuleOptions]);
 
   const persistHybridRules = async (
     nextRules: DynamicFanRule[],
@@ -1187,18 +1479,18 @@ export default function OperatorMachineDetailPage() {
       await systemConfigApi.saveAll({
         [criticalRulesConfigKey]: JSON.stringify(nextRules),
         [groupRulesConfigKey]: JSON.stringify(nextGroups),
-        'operatorFanRuleConflict.defaultCooldownMs': String(
+        "operatorFanRuleConflict.defaultCooldownMs": String(
           Math.max(0, Math.round(nextConflict.defaultCooldownMs)),
         ),
-        'operatorFanRuleConflict.allowEqualPriorityTakeover': String(
+        "operatorFanRuleConflict.allowEqualPriorityTakeover": String(
           nextConflict.allowEqualPriorityTakeover,
         ),
       });
       if (!options?.silent) {
-        message.success('Đã lưu cấu hình hybrid rule cho operator.');
+        message.success("Đã lưu cấu hình hybrid rule cho operator.");
       }
     } catch {
-      message.error('Không thể lưu cấu hình hybrid rule.');
+      message.error("Không thể lưu cấu hình hybrid rule.");
     } finally {
       setSavingRules(false);
     }
@@ -1216,9 +1508,9 @@ export default function OperatorMachineDetailPage() {
         manualTargetTemp: String(next.manualTargetTemp),
         manualTargetHumidity: String(next.manualTargetHumidity),
       });
-      message.success('Da luu setpoint thu cong.');
+      message.success("Da luu setpoint thu cong.");
     } catch {
-      message.warning('Khong luu duoc setpoint thu cong len he thong.');
+      message.warning("Khong luu duoc setpoint thu cong len he thong.");
     } finally {
       setSavingSetpoint(false);
     }
@@ -1226,7 +1518,7 @@ export default function OperatorMachineDetailPage() {
 
   const applyCurrentStageToManual = async () => {
     if (!currentStageSetpoint) {
-      message.warning('Chưa đồng bộ được setpoint của giai đoạn hiện tại.');
+      message.warning("Chưa đồng bộ được setpoint của giai đoạn hiện tại.");
       return;
     }
 
@@ -1253,11 +1545,11 @@ export default function OperatorMachineDetailPage() {
 
   const applyManualRecommendedFan = async () => {
     if (!hasFanFeed) {
-      message.warning('Thiết bị chưa cấu hình feed quạt.');
+      message.warning("Thiết bị chưa cấu hình feed quạt.");
       return;
     }
     if (!isManualMode) {
-      message.warning('Chỉ dùng khuyến nghị quạt trong chế độ Manual.');
+      message.warning("Chỉ dùng khuyến nghị quạt trong chế độ Manual.");
       return;
     }
 
@@ -1270,12 +1562,12 @@ export default function OperatorMachineDetailPage() {
       return;
     }
 
-    message.error('Không đồng bộ được quạt khuyến nghị lên Adafruit IO.');
+    message.error("Không đồng bộ được quạt khuyến nghị lên Adafruit IO.");
   };
 
   useEffect(() => {
     const id = setInterval(() => {
-      if (!machine || machine.status !== 'Running') {
+      if (!machine || machine.status !== "Running") {
         doorOpenSinceRef.current = null;
         heatLossNotifiedRef.current = false;
         setHeatLossDetected((prev) => (prev ? false : prev));
@@ -1294,10 +1586,15 @@ export default function OperatorMachineDetailPage() {
         return;
       }
 
-      if (!heatLossNotifiedRef.current && Date.now() - doorOpenSinceRef.current >= HEAT_LOSS_DELAY_MS) {
+      if (
+        !heatLossNotifiedRef.current &&
+        Date.now() - doorOpenSinceRef.current >= HEAT_LOSS_DELAY_MS
+      ) {
         heatLossNotifiedRef.current = true;
         setHeatLossDetected(true);
-        message.warning(`Phat hien that thoat nhiet: lux > ${DOOR_OPEN_LUX} trong hon ${HEAT_LOSS_DELAY_MS / 1000}s.`);
+        message.warning(
+          `Phat hien that thoat nhiet: lux > ${DOOR_OPEN_LUX} trong hon ${HEAT_LOSS_DELAY_MS / 1000}s.`,
+        );
       }
     }, 1000);
 
@@ -1306,7 +1603,7 @@ export default function OperatorMachineDetailPage() {
 
   if (!machine) {
     return (
-      <div style={{ textAlign: 'center', padding: '80px 0' }}>
+      <div style={{ textAlign: "center", padding: "80px 0" }}>
         <Text type="secondary" style={{ fontSize: 16 }}>
           Khong tim thay thiet bi.
         </Text>
@@ -1314,7 +1611,7 @@ export default function OperatorMachineDetailPage() {
         <Button
           type="link"
           icon={<ReloadOutlined />}
-          onClick={() => router.push('/operator')}
+          onClick={() => router.push("/operator")}
           style={{ marginTop: 8 }}
         >
           Quay lai danh sach
@@ -1324,24 +1621,24 @@ export default function OperatorMachineDetailPage() {
   }
 
   const cfg = statusCfg[machine.status];
-  const isRunning = machine.status === 'Running';
-  const isIdle = machine.status === 'Idle';
-  const isError = machine.status === 'Error';
-  const isMaintenance = machine.status === 'Maintenance';
+  const isRunning = machine.status === "Running";
+  const isIdle = machine.status === "Idle";
+  const isError = machine.status === "Error";
+  const isMaintenance = machine.status === "Maintenance";
   const doorOpen = doorOpenByLux;
 
   const handleQuickStartBatch = async () => {
     if (!selectedRecipe) {
-      message.warning('Vui lòng chon công thức say trước khi khởi động.');
+      message.warning("Vui lòng chon công thức say trước khi khởi động.");
       return;
     }
     if (isMaintenance) {
-      message.warning('Thiết bị đang bảo trì, không thể khởi động máy sấy.');
+      message.warning("Thiết bị đang bảo trì, không thể khởi động máy sấy.");
       return;
     }
 
     if (!machine.deviceID) {
-      message.warning('Không xác định được buồng sấy để khởi động mẻ sấy.');
+      message.warning("Không xác định được buồng sấy để khởi động mẻ sấy.");
       return;
     }
 
@@ -1356,26 +1653,28 @@ export default function OperatorMachineDetailPage() {
       setCompletionNotice(null);
 
       const now = new Date();
-      const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+      const timeStr = `${now.getHours().toString().padStart(2, "0")}:${now.getMinutes().toString().padStart(2, "0")}`;
 
       setMachines((prev) =>
         prev.map((item) =>
           item.id === machineId
             ? {
-              ...item,
-              status: 'Running',
-              recipe: selectedRecipe.name,
-              recipeId: selectedRecipe.id,
-              progress: 0,
-              startTime: timeStr,
-            }
+                ...item,
+                status: "Running",
+                recipe: selectedRecipe.name,
+                recipeId: selectedRecipe.id,
+                progress: 0,
+                startTime: timeStr,
+              }
             : item,
         ),
       );
 
       message.success(`Đã khởi động nhanh mẻ sấy: ${selectedRecipe.name}.`);
     } catch (error) {
-      message.error(error instanceof Error ? error.message : 'Khởi động mẻ sấy thất bại.');
+      message.error(
+        error instanceof Error ? error.message : "Khởi động mẻ sấy thất bại.",
+      );
     }
   };
 
@@ -1386,8 +1685,8 @@ export default function OperatorMachineDetailPage() {
         notifiedCompletionBatchIdsRef.current.add(activeBatchId);
         setCompletionNotice(null);
         await batchesApi.update(activeBatchId, {
-          batchStatus: 'Stopped',
-          batchResult: 'StoppedByOperator',
+          batchStatus: "Stopped",
+          batchResult: "StoppedByOperator",
         });
         setActiveBatchId(null);
         lastRunningBatchIdRef.current = null;
@@ -1398,19 +1697,23 @@ export default function OperatorMachineDetailPage() {
         prev.map((item) =>
           item.id === machineId
             ? {
-              ...item,
-              status: 'Idle',
-              progress: undefined,
-              startTime: undefined,
-              recipe: undefined,
-              recipeId: undefined,
-            }
+                ...item,
+                status: "Idle",
+                progress: undefined,
+                startTime: undefined,
+                recipe: undefined,
+                recipeId: undefined,
+              }
             : item,
         ),
       );
-      message.info('Đã dừng mẻ sấy hiện tại.');
+      message.info("Đã dừng mẻ sấy hiện tại.");
     } catch (error) {
-      message.error(error instanceof Error ? error.message : 'Đã xảy ra lỗi khi dừng mẻ sấy.');
+      message.error(
+        error instanceof Error
+          ? error.message
+          : "Đã xảy ra lỗi khi dừng mẻ sấy.",
+      );
     }
   };
   const formatDuration = (minutes: number) => {
@@ -1427,13 +1730,17 @@ export default function OperatorMachineDetailPage() {
         if (item.id !== machineId) return item;
 
         const actuatorState = item.actuatorState ?? [];
-        const hasActuatorState = actuatorState.some((node) => node.feed === feed);
+        const hasActuatorState = actuatorState.some(
+          (node) => node.feed === feed,
+        );
 
         return {
           ...item,
           actuatorState: hasActuatorState
             ? actuatorState.map((node) =>
-                node.feed === feed ? { ...node, value, updatedAt: nowIso } : node,
+                node.feed === feed
+                  ? { ...node, value, updatedAt: nowIso }
+                  : node,
               )
             : actuatorState,
           sensorState: (item.sensorState ?? []).map((node) =>
@@ -1450,11 +1757,11 @@ export default function OperatorMachineDetailPage() {
     successMessage: string,
   ) => {
     if (!feed) {
-      message.warning('Thiết bị chưa cấu hình feed điều khiển.');
+      message.warning("Thiết bị chưa cấu hình feed điều khiển.");
       return false;
     }
     if (!isManualMode) {
-      message.warning('Chỉ điều khiển chấp hành thủ công trong chế độ Manual.');
+      message.warning("Chỉ điều khiển chấp hành thủ công trong chế độ Manual.");
       return false;
     }
 
@@ -1470,55 +1777,75 @@ export default function OperatorMachineDetailPage() {
       message.success(successMessage);
       return true;
     } catch (error) {
-      message.error(error instanceof Error ? error.message : `Không gửi được lệnh tới feed ${feed}.`);
+      message.error(
+        error instanceof Error
+          ? error.message
+          : `Không gửi được lệnh tới feed ${feed}.`,
+      );
       return false;
     } finally {
       setActuatorBusyMap((prev) => ({ ...prev, [feed]: false }));
     }
   };
 
-  const handleActuatorSwitch = async (
-    node: ActuatorNode,
-    nextOn: boolean,
-  ) => {
+  const handleActuatorSwitch = async (node: ActuatorNode, nextOn: boolean) => {
     const label = node.actuatorName || toSensorLabel(node.actuatorType);
-    await sendActuatorCommand(node.feed, nextOn ? 1 : 0, `${label} -> ${nextOn ? 'BẬT' : 'TẮT'}`);
+    await sendActuatorCommand(
+      node.feed,
+      nextOn ? 1 : 0,
+      `${label} -> ${nextOn ? "BẬT" : "TẮT"}`,
+    );
   };
 
-  const handleActuatorFanCommit = async (node: ActuatorNode, rawLevel: number) => {
+  const handleActuatorFanCommit = async (
+    node: ActuatorNode,
+    rawLevel: number,
+  ) => {
     const nextLevel = Math.max(0, Math.min(100, Math.round(rawLevel)));
-    const label = node.actuatorName || 'Quạt';
-    await sendActuatorCommand(node.feed, nextLevel, `${label} -> ${nextLevel}%`);
+    const label = node.actuatorName || "Quạt";
+    await sendActuatorCommand(
+      node.feed,
+      nextLevel,
+      `${label} -> ${nextLevel}%`,
+    );
   };
 
   const handleActuatorLcdSend = async (node: ActuatorNode) => {
-    const draft = (lcdDraftByFeed[node.feed] ?? '').trim().slice(0, 32);
-    if (!draft) {
-      message.warning('Vui lòng nhập nội dung LCD.');
+    const manualDraft = (lcdDraftByFeed[node.feed] ?? "").trim().slice(0, 32);
+    const payload = manualDraft || lcdAverageMessage;
+    if (!payload.trim()) {
+      message.warning("Vui lòng nhập nội dung LCD.");
       return;
     }
-    const label = node.actuatorName || 'LCD';
-    const ok = await sendActuatorCommand(node.feed, draft, `${label} -> Đã gửi nội dung`);
+    const label = node.actuatorName || "LCD";
+    const ok = await sendActuatorCommand(
+      node.feed,
+      payload,
+      `${label} -> Đã gửi nội dung`,
+    );
     if (!ok) return;
-    setLcdDraftByFeed((prev) => ({ ...prev, [node.feed]: '' }));
+
+    if (manualDraft) {
+      setLcdDraftByFeed((prev) => ({ ...prev, [node.feed]: "" }));
+    }
   };
 
   const handleAddDynamicRule = async () => {
     const sensorFeed = ruleDraft.sensorFeed.trim();
     const fanFeed = ruleDraft.fanFeed.trim();
     if (!sensorFeed) {
-      message.warning('Vui lòng chọn cảm biến nguồn cho rule.');
+      message.warning("Vui lòng chọn cảm biến nguồn cho rule.");
       return;
     }
     if (!fanFeed) {
-      message.warning('Vui lòng chọn quạt đích cho rule.');
+      message.warning("Vui lòng chọn quạt đích cho rule.");
       return;
     }
 
     const nextRule: DynamicFanRule = {
       id: `R${Date.now().toString(36).toUpperCase()}`,
       enabled: true,
-      category: 'critical',
+      category: "critical",
       sensorFeed,
       comparator: ruleDraft.comparator,
       threshold: Number(ruleDraft.threshold),
@@ -1551,14 +1878,21 @@ export default function OperatorMachineDetailPage() {
   };
 
   const handleAddGroupRule = async () => {
-    const sensorFeed = groupDraft.sensorFeed.trim();
-    const fanFeed = groupDraft.fanFeed.trim();
-    if (!sensorFeed) {
-      message.warning('Vui lòng chọn cảm biến điều kiện cho rule group.');
+    const conds = (groupDraft.conditions ?? [])
+      .map((c) => ({
+        sensorFeed: String(c.sensorFeed ?? "").trim(),
+        comparator: c.comparator,
+        threshold: Number(c.threshold ?? 0),
+      }))
+      .filter((c) => c.sensorFeed);
+    const fanFeed = String(groupDraft.fanFeed ?? "").trim();
+
+    if (conds.length === 0) {
+      message.warning("Vui lòng thêm ít nhất một điều kiện cho rule group.");
       return;
     }
     if (!fanFeed) {
-      message.warning('Vui lòng chọn quạt đầu ra cho rule group.');
+      message.warning("Vui lòng chọn quạt đầu ra cho rule group.");
       return;
     }
 
@@ -1566,18 +1900,15 @@ export default function OperatorMachineDetailPage() {
       id: `G${Date.now().toString(36).toUpperCase()}`,
       enabled: true,
       operator: groupDraft.operator,
-      conditions: [
-        {
-          sensorFeed,
-          comparator: groupDraft.comparator,
-          threshold: Number(groupDraft.threshold),
-        },
-      ],
+      conditions: conds,
       outputs: [
         {
           fanFeed,
           fanLevelOn: Math.max(0, Math.min(100, Number(groupDraft.fanLevelOn))),
-          fanLevelOff: Math.max(0, Math.min(100, Number(groupDraft.fanLevelOff))),
+          fanLevelOff: Math.max(
+            0,
+            Math.min(100, Number(groupDraft.fanLevelOff)),
+          ),
         },
       ],
       priority: Math.max(0, Math.round(Number(groupDraft.priority))),
@@ -1589,16 +1920,6 @@ export default function OperatorMachineDetailPage() {
     await persistHybridRules(dynamicFanRules, nextGroups, conflictSettings);
   };
 
-  const handleToggleGroupRule = async (id: string, enabled: boolean) => {
-    const nextGroups = dynamicFanGroups.map((group) =>
-      group.id === id ? { ...group, enabled } : group,
-    );
-    setDynamicFanGroups(nextGroups);
-    await persistHybridRules(dynamicFanRules, nextGroups, conflictSettings, {
-      silent: true,
-    });
-  };
-
   const handleDeleteGroupRule = async (id: string) => {
     const nextGroups = dynamicFanGroups.filter((group) => group.id !== id);
     setDynamicFanGroups(nextGroups);
@@ -1606,7 +1927,11 @@ export default function OperatorMachineDetailPage() {
   };
 
   const handleSaveConflictSettings = async () => {
-    await persistHybridRules(dynamicFanRules, dynamicFanGroups, conflictSettings);
+    await persistHybridRules(
+      dynamicFanRules,
+      dynamicFanGroups,
+      conflictSettings,
+    );
   };
 
   return (
@@ -1614,40 +1939,67 @@ export default function OperatorMachineDetailPage() {
       <div style={{ marginBottom: 20 }}>
         <div
           style={{
-            display: 'flex',
-            alignItems: 'flex-start',
-            justifyContent: 'space-between',
-            flexWrap: 'wrap',
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
             gap: 12,
           }}
         >
           <div>
             <Space style={{ marginBottom: 10 }}>
-              <Button icon={<ArrowLeftOutlined />} onClick={() => router.push('/operator')}>
+              <Button
+                icon={<ArrowLeftOutlined />}
+                onClick={() => router.push("/operator")}
+              >
                 Về dashboard
               </Button>
-              <Button icon={<ReloadOutlined />} onClick={refresh} loading={loading}>
+              <Button
+                icon={<ReloadOutlined />}
+                onClick={refresh}
+                loading={loading}
+              >
                 Làm mới
               </Button>
             </Space>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+                flexWrap: "wrap",
+              }}
+            >
               <Title level={2} style={{ margin: 0 }}>
-                <CloudServerOutlined style={{ marginRight: 8, color: '#1677ff' }} />
+                <CloudServerOutlined
+                  style={{ marginRight: 8, color: "#1677ff" }}
+                />
                 {machine.id} · {machine.name}
               </Title>
               <Tag
                 color={cfg.tagColor}
-                style={{ borderRadius: 20, fontSize: 14, padding: '4px 14px', border: 'none' }}
+                style={{
+                  borderRadius: 20,
+                  fontSize: 14,
+                  padding: "4px 14px",
+                  border: "none",
+                }}
                 icon={
-                  isRunning ? <ThunderboltOutlined />
-                    : isIdle ? <PauseCircleOutlined />
-                      : isError ? <WarningOutlined /> : <ToolOutlined />
+                  isRunning ? (
+                    <ThunderboltOutlined />
+                  ) : isIdle ? (
+                    <PauseCircleOutlined />
+                  ) : isError ? (
+                    <WarningOutlined />
+                  ) : (
+                    <ToolOutlined />
+                  )
                 }
               >
                 {cfg.text}
               </Tag>
-              <Tag color={connected ? 'success' : 'error'}>
-                {connected ? 'MQTT Connected' : 'MQTT Disconnected'}
+              <Tag color={connected ? "success" : "error"}>
+                {connected ? "MQTT Connected" : "MQTT Disconnected"}
               </Tag>
             </div>
             <Space style={{ marginTop: 6 }} size={12}>
@@ -1662,29 +2014,37 @@ export default function OperatorMachineDetailPage() {
               )}
               {activeRecipe && (
                 <Text type="secondary" style={{ fontSize: 13 }}>
-                  <BookOutlined style={{ marginRight: 4, color: '#1677ff' }} />
-                  Mẻ sấy: <Text strong style={{ color: '#1677ff' }}>{activeRecipe.name}</Text>
+                  <BookOutlined style={{ marginRight: 4, color: "#1677ff" }} />
+                  Mẻ sấy:{" "}
+                  <Text strong style={{ color: "#1677ff" }}>
+                    {activeRecipe.name}
+                  </Text>
                 </Text>
               )}
               {isRunning && (
-                <Tag color={currentBatchStage ? 'processing' : 'default'}>
-                  {currentBatchStage ? `Giai đoạn ${currentBatchStage}` : 'Đang đồng bộ giai đoạn...'}
+                <Tag color={currentBatchStage ? "processing" : "default"}>
+                  {currentBatchStage
+                    ? `Giai đoạn ${currentBatchStage}`
+                    : "Đang đồng bộ giai đoạn..."}
                 </Tag>
               )}
               {lastUpdated && (
                 <Text type="secondary" style={{ fontSize: 12 }}>
-                  Cập nhật: {lastUpdated.toLocaleTimeString('vi', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  Cập nhật:{" "}
+                  {lastUpdated.toLocaleTimeString("vi", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                  })}
                 </Text>
               )}
             </Space>
           </div>
           <div style={{ marginBottom: 16, maxWidth: 520 }}>
-        <OperatingModeToggle onModeChange={setOperatingMode} />
-      </div>
+            <OperatingModeToggle onModeChange={setOperatingMode} />
+          </div>
         </div>
       </div>
-
-      
 
       {errorMsg && (
         <Alert
@@ -1731,11 +2091,14 @@ export default function OperatorMachineDetailPage() {
           description={
             currentStageSetpoint
               ? `Gợi ý từ công thức: ${Math.round(currentStageSetpoint.temperatureSetpoint)}°C / ${Math.round(currentStageSetpoint.humiditySetpoint)}%. Hệ thống không tự ép setpoint trong Manual.`
-              : 'Đang chờ đồng bộ setpoint từ recipe stage. Vui lòng theo dõi trước khi vận hành tiếp.'
+              : "Đang chờ đồng bộ setpoint từ recipe stage. Vui lòng theo dõi trước khi vận hành tiếp."
           }
           action={
             <Space>
-              <Button size="small" onClick={() => setPendingManualStageOrder(null)}>
+              <Button
+                size="small"
+                onClick={() => setPendingManualStageOrder(null)}
+              >
                 Tôi sẽ tự chỉnh
               </Button>
               <Button
@@ -1761,20 +2124,26 @@ export default function OperatorMachineDetailPage() {
           description={
             <>
               <div>
-                Nhiệt độ hiện tại {effectiveTemperature?.toFixed(1) ?? '--'}°C,
-                mục tiêu {autoTempSetpoint !== null ? Math.round(autoTempSetpoint) : '--'}°C
+                Nhiệt độ hiện tại {effectiveTemperature?.toFixed(1) ?? "--"}°C,
+                mục tiêu{" "}
+                {autoTempSetpoint !== null
+                  ? Math.round(autoTempSetpoint)
+                  : "--"}
+                °C
                 {manualTempExceedDelta > 0
                   ? ` (vượt ${manualTempExceedDelta.toFixed(1)}°C).`
-                  : '.'}
+                  : "."}
               </div>
               <div>
-                Độ ẩm hiện tại {effectiveHumidity?.toFixed(1) ?? '--'}%, mục tiêu{' '}
+                Độ ẩm hiện tại {effectiveHumidity?.toFixed(1) ?? "--"}%, mục
+                tiêu{" "}
                 {autoHumiditySetpoint !== null
                   ? Math.round(autoHumiditySetpoint)
-                  : '--'}%
+                  : "--"}
+                %
                 {manualHumidityExceedDelta > 0
                   ? ` (vượt ${manualHumidityExceedDelta.toFixed(1)}%).`
-                  : '.'}
+                  : "."}
               </div>
               <div>
                 Khuyến nghị: tăng quạt lên khoảng {manualRecommendedFanLevel}%
@@ -1802,10 +2171,12 @@ export default function OperatorMachineDetailPage() {
           showIcon
           message={
             <div>
-              <Text strong style={{ color: '#ff4d4f', marginRight: 8 }}>
-                {machine.errorCode || 'ERROR'}
+              <Text strong style={{ color: "#ff4d4f", marginRight: 8 }}>
+                {machine.errorCode || "ERROR"}
               </Text>
-              <Text>{machine.errorMsg || 'Thiet bi gap su co can kiem tra.'}</Text>
+              <Text>
+                {machine.errorMsg || "Thiet bi gap su co can kiem tra."}
+              </Text>
             </div>
           }
         />
@@ -1815,106 +2186,133 @@ export default function OperatorMachineDetailPage() {
         <Col xs={24} lg={15} xl={16}>
           <Card
             style={{ borderRadius: 14, marginBottom: 18 }}
-            title='Bản đồ node buồng sấy'
+            title="Bản đồ node buồng sấy"
             extra={
               <Space size={8}>
-                <Tag color='blue'>Tổng node: {sensorSummary.total}</Tag>
-                <Tag color='green'>Online: {sensorSummary.online}</Tag>
-                {sensorSummary.offline > 0 ? <Tag color='default'>Offline: {sensorSummary.offline}</Tag> : null}
+                <Tag color="blue">Tổng node: {sensorSummary.total}</Tag>
+                <Tag color="green">Online: {sensorSummary.online}</Tag>
+                {sensorSummary.offline > 0 ? (
+                  <Tag color="default">Offline: {sensorSummary.offline}</Tag>
+                ) : null}
               </Space>
             }
           >
-            <Space direction='vertical' size={12} style={{ width: '100%' }}>
+            <Space direction="vertical" size={12} style={{ width: "100%" }}>
               <Segmented<PanelMode>
                 block
                 value={panelMode}
                 onChange={(value) => setPanelMode(value as PanelMode)}
                 options={[
-                  { label: 'Tổng quan', value: 'overview' },
-                  { label: 'Cảm biến', value: 'sensors' },
-                  { label: 'Chấp hành', value: 'actuators' },
-                  { label: 'Quy tắc', value: 'rules' },
+                  { label: "Tổng quan", value: "overview" },
+                  { label: "Cảm biến", value: "sensors" },
+                  { label: "Chấp hành", value: "actuators" },
+                  { label: "Quy tắc", value: "rules" },
                 ]}
               />
 
-              {panelMode === 'overview' ? (
+              {panelMode === "overview" ? (
                 <>
                   <Row gutter={[12, 12]}>
                     <Col xs={12} md={8}>
-                      <Card size='small'>
+                      <Card size="small">
                         <Statistic
-                          title='Nhiệt độ trung bình'
-                          value={averageTemperature ?? 0}
+                          title="Nhiệt độ trung bình"
+                          value={
+                            averageTemperature !== null
+                              ? averageTemperature
+                              : "--"
+                          }
                           precision={1}
-                          suffix='°C'
+                          suffix="°C"
                         />
-                        <Text type='secondary' style={{ fontSize: 12 }}>
+                        <Text type="secondary" style={{ fontSize: 12 }}>
                           Nguồn hợp lệ: {healthyTemperatureCount} cảm biến
                         </Text>
                       </Card>
                     </Col>
                     <Col xs={12} md={8}>
-                      <Card size='small'>
+                      <Card size="small">
                         <Statistic
-                          title='Độ ẩm trung bình'
-                          value={averageHumidity ?? 0}
+                          title="Độ ẩm trung bình"
+                          value={
+                            averageHumidity !== null ? averageHumidity : "--"
+                          }
                           precision={1}
-                          suffix='%'
+                          suffix="%"
                         />
-                        <Text type='secondary' style={{ fontSize: 12 }}>
+                        <Text type="secondary" style={{ fontSize: 12 }}>
                           Nguồn có dữ liệu: {humiditySensorCount} cảm biến
                         </Text>
                       </Card>
                     </Col>
                     <Col xs={12} md={8}>
-                      <Card size='small'>
-                        <Statistic title='Mức quạt chính' value={Math.round(output.fanLevel)} suffix='%' />
+                      <Card size="small">
+                        <Statistic
+                          title="Mức quạt chính"
+                          value={Math.round(output.fanLevel)}
+                          suffix="%"
+                        />
                       </Card>
                     </Col>
                   </Row>
-                  <Text type='secondary'>
+                  <Text type="secondary">
                     {loading
-                      ? 'Đang tải dữ liệu Adafruit IO...'
+                      ? "Đang tải dữ liệu Adafruit IO..."
                       : `Lần cập nhật gần nhất: ${
                           lastUpdated
-                            ? lastUpdated.toLocaleTimeString('vi', {
-                                hour: '2-digit',
-                                minute: '2-digit',
-                                second: '2-digit',
+                            ? lastUpdated.toLocaleTimeString("vi", {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                                second: "2-digit",
                               })
-                            : 'chưa có dữ liệu'
+                            : "chưa có dữ liệu"
                         }`}
                   </Text>
                   <Space wrap>
-                    <Tag color={faultyTemperatureCount > 0 ? 'warning' : 'default'}>
+                    <Tag
+                      color={faultyTemperatureCount > 0 ? "warning" : "default"}
+                    >
                       Sensor lỗi ảo: {faultyTemperatureCount}
                     </Tag>
-                    <Tag color={criticalTemperatureCount > 0 ? 'error' : 'default'}>
-                      Sensor vượt ngưỡng {maxTempSafeThreshold}°C: {criticalTemperatureCount}
+                    <Tag
+                      color={criticalTemperatureCount > 0 ? "error" : "default"}
+                    >
+                      Sensor vượt ngưỡng {maxTempSafeThreshold}°C:{" "}
+                      {criticalTemperatureCount}
                     </Tag>
                   </Space>
                 </>
               ) : null}
 
-              {panelMode === 'sensors' ? (
-                <Space direction='vertical' size={12} style={{ width: '100%' }}>
+              {panelMode === "sensors" ? (
+                <Space direction="vertical" size={12} style={{ width: "100%" }}>
                   {[
-                    { key: 'temperature', title: 'Nhóm nhiệt độ' },
-                    { key: 'humidity', title: 'Nhóm độ ẩm' },
-                    { key: 'light', title: 'Nhóm ánh sáng' },
-                    { key: 'other', title: 'Nhóm khác' },
+                    { key: "temperature", title: "Nhóm nhiệt độ" },
+                    { key: "humidity", title: "Nhóm độ ẩm" },
+                    { key: "light", title: "Nhóm ánh sáng" },
+                    { key: "other", title: "Nhóm khác" },
                   ].map((group) => {
                     const rows = groupedSensorNodes[group.key] ?? [];
                     if (rows.length === 0) return null;
 
                     return (
-                      <Card key={group.key} size='small' title={`${group.title} (${rows.length})`}>
+                      <Card
+                        key={group.key}
+                        size="small"
+                        title={`${group.title} (${rows.length})`}
+                      >
                         <Row gutter={[12, 12]}>
                           {rows.map((row) => {
-                            const isTempSensor = normalizeFeedName(row.sensorType).includes('temp');
+                            const isTempSensor = normalizeFeedName(
+                              row.sensorType,
+                            ).includes("temp");
                             const hasNumericValue = Number.isFinite(row.value);
-                            const tempValue = hasNumericValue ? (row.value as number) : null;
-                            const updatedAtMs = row.updatedAt ? new Date(row.updatedAt).getTime() : null;
+                            const tempValue = hasNumericValue
+                              ? (row.value as number)
+                              : null;
+                            const updatedAtMs = row.updatedAt
+                              ? new Date(row.updatedAt).getTime()
+                              : null;
                             const isMissing =
                               !hasNumericValue ||
                               updatedAtMs === null ||
@@ -1922,7 +2320,8 @@ export default function OperatorMachineDetailPage() {
                             const isFaulty =
                               isTempSensor &&
                               tempValue !== null &&
-                              (tempValue < SENSOR_FAULT_TEMP_MIN || tempValue > SENSOR_FAULT_TEMP_MAX);
+                              (tempValue < SENSOR_FAULT_TEMP_MIN ||
+                                tempValue > SENSOR_FAULT_TEMP_MAX);
                             const isCritical =
                               isTempSensor &&
                               tempValue !== null &&
@@ -1930,60 +2329,83 @@ export default function OperatorMachineDetailPage() {
                               tempValue > maxTempSafeThreshold;
                             const pulseDanger = isCritical && blinkOn;
 
-                            const cardTone = isFaulty || isCritical
-                              ? {
-                                  borderColor: '#ff4d4f',
-                                  background: '#fff1f0',
-                                  boxShadow: pulseDanger
-                                    ? '0 0 0 2px rgba(255,77,79,0.18), 0 0 18px rgba(255,77,79,0.28)'
-                                    : '0 0 0 1px rgba(255,77,79,0.16)',
-                                }
-                              : isMissing
+                            const cardTone =
+                              isFaulty || isCritical
                                 ? {
-                                    borderColor: '#faad14',
-                                    background: '#fffbe6',
-                                    boxShadow: '0 0 0 1px rgba(250,173,20,0.15)',
+                                    borderColor: "#ff4d4f",
+                                    background: "#fff1f0",
+                                    boxShadow: pulseDanger
+                                      ? "0 0 0 2px rgba(255,77,79,0.18), 0 0 18px rgba(255,77,79,0.28)"
+                                      : "0 0 0 1px rgba(255,77,79,0.16)",
                                   }
-                                : {
-                                    borderColor: '#91caff',
-                                    background: '#e6f4ff',
-                                    boxShadow: '0 0 0 1px rgba(22,119,255,0.16)',
-                                  };
+                                : isMissing
+                                  ? {
+                                      borderColor: "#faad14",
+                                      background: "#fffbe6",
+                                      boxShadow:
+                                        "0 0 0 1px rgba(250,173,20,0.15)",
+                                    }
+                                  : {
+                                      borderColor: "#91caff",
+                                      background: "#e6f4ff",
+                                      boxShadow:
+                                        "0 0 0 1px rgba(22,119,255,0.16)",
+                                    };
 
                             return (
-                            <Col xs={24} md={12} xl={8} key={row.key}>
-                              <Card
-                                size='small'
-                                style={cardTone}
-                              >
-                                <Space direction='vertical' size={2} style={{ width: '100%' }}>
-                                  <Text strong>{row.sensorName || toSensorLabel(row.sensorType)}</Text>
-                                  <Text type='secondary'>
-                                    {toSensorLabel(row.sensorType)} · {row.feed}
-                                  </Text>
-                                  <Text>
-                                    {row.value ?? '--'} {row.unit}
-                                  </Text>
-                                  {isMissing ? (
-                                    <Tag color='warning'>Thiếu dữ liệu hoặc node quá hạn cập nhật</Tag>
-                                  ) : null}
-                                  {isFaulty ? (
-                                    <Tag color='warning'>Sensor lỗi dải: loại khỏi trung bình</Tag>
-                                  ) : null}
-                                  {isCritical ? (
-                                    <Tag color={pulseDanger ? 'error' : 'volcano'}>
-                                      Cảnh báo cục bộ: vượt {maxTempSafeThreshold}°C
-                                    </Tag>
-                                  ) : null}
-                                  <Text type='secondary' style={{ fontSize: 12 }}>
-                                    {row.updatedAt
-                                      ? dayjs(row.updatedAt).format('HH:mm:ss DD/MM')
-                                      : 'Chưa có timestamp'}
-                                  </Text>
-                                </Space>
-                              </Card>
-                            </Col>
-                          )})}
+                              <Col xs={24} md={12} xl={8} key={row.key}>
+                                <Card size="small" style={cardTone}>
+                                  <Space
+                                    direction="vertical"
+                                    size={2}
+                                    style={{ width: "100%" }}
+                                  >
+                                    <Text strong>
+                                      {row.sensorName ||
+                                        toSensorLabel(row.sensorType)}
+                                    </Text>
+                                    <Text type="secondary">
+                                      {toSensorLabel(row.sensorType)} ·{" "}
+                                      {row.feed}
+                                    </Text>
+                                    <Text>
+                                      {row.value ?? "--"} {row.unit}
+                                    </Text>
+                                    {isMissing ? (
+                                      <Tag color="warning">
+                                        Thiếu dữ liệu hoặc node quá hạn cập nhật
+                                      </Tag>
+                                    ) : null}
+                                    {isFaulty ? (
+                                      <Tag color="warning">
+                                        Sensor lỗi dải: loại khỏi trung bình
+                                      </Tag>
+                                    ) : null}
+                                    {isCritical ? (
+                                      <Tag
+                                        color={
+                                          pulseDanger ? "error" : "volcano"
+                                        }
+                                      >
+                                        Cảnh báo cục bộ: vượt{" "}
+                                        {maxTempSafeThreshold}°C
+                                      </Tag>
+                                    ) : null}
+                                    <Text
+                                      type="secondary"
+                                      style={{ fontSize: 12 }}
+                                    >
+                                      {row.updatedAt
+                                        ? dayjs(row.updatedAt).format(
+                                            "HH:mm:ss DD/MM",
+                                          )
+                                        : "Chưa có timestamp"}
+                                    </Text>
+                                  </Space>
+                                </Card>
+                              </Col>
+                            );
+                          })}
                         </Row>
                       </Card>
                     );
@@ -1991,95 +2413,152 @@ export default function OperatorMachineDetailPage() {
                 </Space>
               ) : null}
 
-              {panelMode === 'actuators' ? (
-                <Space direction='vertical' size={12} style={{ width: '100%' }}>
+              {panelMode === "actuators" ? (
+                <Space direction="vertical" size={12} style={{ width: "100%" }}>
                   <Alert
-                    type={isManualMode ? 'success' : 'warning'}
+                    type={isManualMode ? "success" : "warning"}
                     showIcon
-                    message={isManualMode
-                      ? 'Chế độ Manual: cho phép điều khiển từng chấp hành theo feed.'
-                      : 'Chế độ Auto: chỉ giám sát trạng thái chấp hành, không cho phép điều khiển thủ công.'}
+                    message={
+                      isManualMode
+                        ? "Chế độ Manual: cho phép điều khiển từng chấp hành theo feed."
+                        : "Chế độ Auto: chỉ giám sát trạng thái chấp hành, không cho phép điều khiển thủ công."
+                    }
                   />
 
                   <Segmented<ActuatorFilter>
                     block
                     value={actuatorFilter}
-                    onChange={(value) => setActuatorFilter(value as ActuatorFilter)}
+                    onChange={(value) =>
+                      setActuatorFilter(value as ActuatorFilter)
+                    }
                     options={[
-                      { label: `Tất cả (${actuatorNodes.length})`, value: 'all' },
-                      { label: `Quạt (${groupedActuatorNodes.fan.length})`, value: 'fan' },
-                      { label: `Bơm (${groupedActuatorNodes.pump.length})`, value: 'pump' },
-                      { label: `LED (${groupedActuatorNodes.led.length})`, value: 'led' },
-                      { label: `LCD (${groupedActuatorNodes.lcd.length})`, value: 'lcd' },
-                      { label: `Khác (${groupedActuatorNodes.other.length})`, value: 'other' },
+                      {
+                        label: `Tất cả (${actuatorNodes.length})`,
+                        value: "all",
+                      },
+                      {
+                        label: `Quạt (${groupedActuatorNodes.fan.length})`,
+                        value: "fan",
+                      },
+                      {
+                        label: `Bơm (${groupedActuatorNodes.pump.length})`,
+                        value: "pump",
+                      },
+                      {
+                        label: `LED (${groupedActuatorNodes.led.length})`,
+                        value: "led",
+                      },
+                      {
+                        label: `LCD (${groupedActuatorNodes.lcd.length})`,
+                        value: "lcd",
+                      },
+                      {
+                        label: `Khác (${groupedActuatorNodes.other.length})`,
+                        value: "other",
+                      },
                     ]}
                   />
 
                   {actuatorNodes.length === 0 ? (
-                    <Empty
-                      description='Chưa phát hiện thiết bị chấp hành nào. Vui lòng cấu hình actuator channel cho thiết bị này.'
-                    />
+                    <Empty description="Chưa phát hiện thiết bị chấp hành nào. Vui lòng cấu hình actuator channel cho thiết bị này." />
                   ) : (
                     <>
-                      <Text type='secondary' style={{ fontSize: 13 }}>
-                        Hiển thị {filteredActuatorNodes.length}/{actuatorNodes.length} chấp hành theo bộ lọc.
+                      <Text type="secondary" style={{ fontSize: 13 }}>
+                        Hiển thị {filteredActuatorNodes.length}/
+                        {actuatorNodes.length} chấp hành theo bộ lọc.
                       </Text>
-                      {([
-                        'fan',
-                        'pump',
-                        'led',
-                        'lcd',
-                        'heater',
-                        'humidifier',
-                        'other',
-                      ] as ActuatorKind[]).map((kind) => {
+                      {(
+                        [
+                          "fan",
+                          "pump",
+                          "led",
+                          "lcd",
+                          "heater",
+                          "humidifier",
+                          "other",
+                        ] as ActuatorKind[]
+                      ).map((kind) => {
                         const nodes = groupedFilteredActuatorNodes[kind];
                         if (nodes.length === 0) return null;
 
                         const titleMap: Record<ActuatorKind, string> = {
-                          fan: 'Nhóm quạt',
-                          pump: 'Nhóm bơm',
-                          led: 'Nhóm LED',
-                          lcd: 'Nhóm LCD',
-                          heater: 'Nhóm gia nhiệt',
-                          humidifier: 'Nhóm tạo ẩm',
-                          other: 'Nhóm khác',
+                          fan: "Nhóm quạt",
+                          pump: "Nhóm bơm",
+                          led: "Nhóm LED",
+                          lcd: "Nhóm LCD",
+                          heater: "Nhóm gia nhiệt",
+                          humidifier: "Nhóm tạo ẩm",
+                          other: "Nhóm khác",
                         };
                         const colorMap: Record<ActuatorKind, string> = {
-                          fan: 'blue',
-                          pump: 'geekblue',
-                          led: 'gold',
-                          lcd: 'cyan',
-                          heater: 'volcano',
-                          humidifier: 'green',
-                          other: 'purple',
+                          fan: "blue",
+                          pump: "geekblue",
+                          led: "gold",
+                          lcd: "cyan",
+                          heater: "volcano",
+                          humidifier: "green",
+                          other: "purple",
                         };
 
                         return (
-                          <Card key={kind} size='small' title={`${titleMap[kind]} (${nodes.length})`}>
+                          <Card
+                            key={kind}
+                            size="small"
+                            title={`${titleMap[kind]} (${nodes.length})`}
+                          >
                             <Row gutter={[12, 12]}>
                               {nodes.map((node, index) => {
-                                const numericVal = coerceNumericValue(node.value);
+                                const numericVal = coerceNumericValue(
+                                  node.value,
+                                );
                                 const isOn = coerceSwitchValue(node.value);
-                                const isBusy = Boolean(actuatorBusyMap[node.feed]);
-                                const fanDraft = actuatorLevelDraftMap[node.feed] ?? Math.max(0, Math.min(100, Math.round(numericVal ?? 0)));
-                                const lcdDraft = lcdDraftByFeed[node.feed] ?? '';
+                                const isBusy = Boolean(
+                                  actuatorBusyMap[node.feed],
+                                );
+                                const fanDraft =
+                                  actuatorLevelDraftMap[node.feed] ??
+                                  Math.max(
+                                    0,
+                                    Math.min(100, Math.round(numericVal ?? 0)),
+                                  );
+                                const lcdDraft =
+                                  lcdDraftByFeed[node.feed] ?? "";
 
                                 return (
                                   <Col xs={24} md={12} xl={8} key={node.key}>
-                                    <Card size='small'>
-                                      <Space direction='vertical' size={8} style={{ width: '100%' }}>
+                                    <Card size="small">
+                                      <Space
+                                        direction="vertical"
+                                        size={8}
+                                        style={{ width: "100%" }}
+                                      >
                                         <Space size={6} wrap>
-                                          <Text strong>{node.actuatorName || titleMap[kind]} {index + 1}</Text>
-                                          <Tag color={colorMap[kind]}>{titleMap[kind]}</Tag>
+                                          <Text strong>
+                                            {node.actuatorName ||
+                                              titleMap[kind]}{" "}
+                                            {index + 1}
+                                          </Text>
+                                          <Tag color={colorMap[kind]}>
+                                            {titleMap[kind]}
+                                          </Tag>
                                         </Space>
-                                        <Text type='secondary'>{node.feed}</Text>
+                                        <Text type="secondary">
+                                          {node.feed}
+                                        </Text>
                                         <Text>
-                                          {numericVal !== null ? numericVal.toFixed(1) : String(node.value ?? '--')}
-                                          {kind === 'fan' && numericVal !== null ? '%' : ''}
+                                          {kind === "lcd"
+                                            ? lcdDraft ||
+                                              lcdAverageMessage ||
+                                              String(node.value ?? "--")
+                                            : numericVal !== null
+                                              ? numericVal.toFixed(1)
+                                              : String(node.value ?? "--")}
+                                          {kind === "fan" && numericVal !== null
+                                            ? "%"
+                                            : ""}
                                         </Text>
 
-                                        {kind === 'fan' ? (
+                                        {kind === "fan" ? (
                                           <>
                                             <Slider
                                               min={0}
@@ -2088,44 +2567,81 @@ export default function OperatorMachineDetailPage() {
                                               value={fanDraft}
                                               disabled={!isManualMode || isBusy}
                                               onChange={(value) => {
-                                                if (typeof value !== 'number') return;
-                                                setActuatorLevelDraftMap((prev) => ({
-                                                  ...prev,
-                                                  [node.feed]: value,
-                                                }));
+                                                if (typeof value !== "number")
+                                                  return;
+                                                setActuatorLevelDraftMap(
+                                                  (prev) => ({
+                                                    ...prev,
+                                                    [node.feed]: value,
+                                                  }),
+                                                );
                                               }}
                                               onChangeComplete={(value) => {
-                                                if (typeof value !== 'number') return;
-                                                void handleActuatorFanCommit(node, value);
+                                                if (typeof value !== "number")
+                                                  return;
+                                                void handleActuatorFanCommit(
+                                                  node,
+                                                  value,
+                                                );
                                               }}
                                             />
                                             <Space wrap>
                                               <Button
-                                                size='small'
-                                                disabled={!isManualMode || isBusy}
+                                                size="small"
+                                                disabled={
+                                                  !isManualMode || isBusy
+                                                }
                                                 onClick={() => {
-                                                  setActuatorLevelDraftMap((prev) => ({ ...prev, [node.feed]: 0 }));
-                                                  void handleActuatorFanCommit(node, 0);
+                                                  setActuatorLevelDraftMap(
+                                                    (prev) => ({
+                                                      ...prev,
+                                                      [node.feed]: 0,
+                                                    }),
+                                                  );
+                                                  void handleActuatorFanCommit(
+                                                    node,
+                                                    0,
+                                                  );
                                                 }}
                                               >
                                                 0%
                                               </Button>
                                               <Button
-                                                size='small'
-                                                disabled={!isManualMode || isBusy}
+                                                size="small"
+                                                disabled={
+                                                  !isManualMode || isBusy
+                                                }
                                                 onClick={() => {
-                                                  setActuatorLevelDraftMap((prev) => ({ ...prev, [node.feed]: 50 }));
-                                                  void handleActuatorFanCommit(node, 50);
+                                                  setActuatorLevelDraftMap(
+                                                    (prev) => ({
+                                                      ...prev,
+                                                      [node.feed]: 50,
+                                                    }),
+                                                  );
+                                                  void handleActuatorFanCommit(
+                                                    node,
+                                                    50,
+                                                  );
                                                 }}
                                               >
                                                 50%
                                               </Button>
                                               <Button
-                                                size='small'
-                                                disabled={!isManualMode || isBusy}
+                                                size="small"
+                                                disabled={
+                                                  !isManualMode || isBusy
+                                                }
                                                 onClick={() => {
-                                                  setActuatorLevelDraftMap((prev) => ({ ...prev, [node.feed]: 100 }));
-                                                  void handleActuatorFanCommit(node, 100);
+                                                  setActuatorLevelDraftMap(
+                                                    (prev) => ({
+                                                      ...prev,
+                                                      [node.feed]: 100,
+                                                    }),
+                                                  );
+                                                  void handleActuatorFanCommit(
+                                                    node,
+                                                    100,
+                                                  );
                                                 }}
                                               >
                                                 100%
@@ -2134,12 +2650,14 @@ export default function OperatorMachineDetailPage() {
                                           </>
                                         ) : null}
 
-                                        {kind === 'lcd' ? (
+                                        {kind === "lcd" ? (
                                           <>
                                             <TextArea
                                               rows={2}
                                               maxLength={64}
-                                              value={lcdDraft}
+                                              value={
+                                                lcdDraft || lcdAverageMessage
+                                              }
                                               onChange={(e) =>
                                                 setLcdDraftByFeed((prev) => ({
                                                   ...prev,
@@ -2147,40 +2665,59 @@ export default function OperatorMachineDetailPage() {
                                                 }))
                                               }
                                               disabled={!isManualMode || isBusy}
-                                              placeholder='Nhập tối đa 32 ký tự...'
+                                              placeholder="Mặc định sẽ gửi nhiệt độ TB và độ ẩm TB."
                                             />
                                             <Button
-                                              type='primary'
-                                              size='small'
+                                              type="primary"
+                                              size="small"
                                               loading={isBusy}
-                                              disabled={!isManualMode || !lcdDraft.trim()}
-                                              onClick={() => void handleActuatorLcdSend(node)}
+                                              disabled={!isManualMode}
+                                              onClick={() =>
+                                                void handleActuatorLcdSend(node)
+                                              }
                                             >
                                               Gửi LCD
                                             </Button>
                                           </>
                                         ) : null}
 
-                                        {kind !== 'fan' && kind !== 'lcd' ? (
-                                          <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-                                            <Tag color={isOn ? 'success' : 'default'}>
-                                              {isOn ? 'Đang bật' : 'Đang tắt'}
+                                        {kind !== "fan" && kind !== "lcd" ? (
+                                          <Space
+                                            style={{
+                                              width: "100%",
+                                              justifyContent: "space-between",
+                                            }}
+                                          >
+                                            <Tag
+                                              color={
+                                                isOn ? "success" : "default"
+                                              }
+                                            >
+                                              {isOn ? "Đang bật" : "Đang tắt"}
                                             </Tag>
                                             <Switch
                                               checked={isOn}
                                               loading={isBusy}
                                               disabled={!isManualMode || isBusy}
                                               onChange={(checked) => {
-                                                void handleActuatorSwitch(node, checked);
+                                                void handleActuatorSwitch(
+                                                  node,
+                                                  checked,
+                                                );
                                               }}
                                             />
                                           </Space>
                                         ) : null}
 
-                                        <Text type='secondary' style={{ fontSize: 12 }}>
+                                        <Text
+                                          type="secondary"
+                                          style={{ fontSize: 12 }}
+                                        >
                                           {node.updatedAt
-                                            ? dayjs(node.updatedAt).format('HH:mm:ss DD/MM')
-                                            : 'Chưa có dữ liệu'}
+                                            ? dayjs(node.updatedAt).format(
+                                                "HH:mm:ss DD/MM",
+                                              )
+                                            : "Chưa có dữ liệu"}
                                         </Text>
                                       </Space>
                                     </Card>
@@ -2196,30 +2733,52 @@ export default function OperatorMachineDetailPage() {
                 </Space>
               ) : null}
 
-              {panelMode === 'rules' ? (
-                <Space direction='vertical' size={12} style={{ width: '100%' }}>
-                  <Card size='small' title='Rule động cảm biến → chấp hành'>
-                    <Space direction='vertical' size={10} style={{ width: '100%' }}>
-                      <Text strong>1) Quy tắc hoạt động</Text>
+              {panelMode === "rules" ? (
+                <Space direction="vertical" size={12} style={{ width: "100%" }}>
+                  <Card size="small" title="Rule động cảm biến → chấp hành">
+                    <Space
+                      direction="vertical"
+                      size={10}
+                      style={{ width: "100%" }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: 8,
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                        }}
+                      >
+                        <Text strong>1) Quy tắc hoạt động</Text>
+                        <Button
+                          type="default"
+                          onClick={() => simulateConflictResolution()}
+                        >
+                          Mô phỏng xung đột
+                        </Button>
+                      </div>
                       <Row gutter={[8, 8]}>
                         <Col xs={24} md={10}>
                           <Select
-                            style={{ width: '100%' }}
-                            placeholder='Chọn cảm biến nguồn'
+                            style={{ width: "100%" }}
+                            placeholder="Chọn cảm biến nguồn"
                             value={ruleDraft.sensorFeed || undefined}
                             options={sensorRuleOptions}
                             onChange={(value) =>
-                              setRuleDraft((prev) => ({ ...prev, sensorFeed: value }))
+                              setRuleDraft((prev) => ({
+                                ...prev,
+                                sensorFeed: value,
+                              }))
                             }
                           />
                         </Col>
                         <Col xs={24} md={4}>
                           <Select
-                            style={{ width: '100%' }}
+                            style={{ width: "100%" }}
                             value={ruleDraft.comparator}
                             options={[
-                              { value: 'gte', label: '>=' },
-                              { value: 'lte', label: '<=' },
+                              { value: "gte", label: ">=" },
+                              { value: "lte", label: "<=" },
                             ]}
                             onChange={(value) =>
                               setRuleDraft((prev) => ({
@@ -2231,7 +2790,7 @@ export default function OperatorMachineDetailPage() {
                         </Col>
                         <Col xs={24} md={4}>
                           <InputNumber
-                            style={{ width: '100%' }}
+                            style={{ width: "100%" }}
                             value={ruleDraft.threshold}
                             onChange={(value) =>
                               setRuleDraft((prev) => ({
@@ -2239,17 +2798,24 @@ export default function OperatorMachineDetailPage() {
                                 threshold: Number(value ?? 0),
                               }))
                             }
-                            placeholder='Ngưỡng'
+                            placeholder="Ngưỡng"
                           />
                         </Col>
                         <Col xs={24} md={6}>
                           <Select
-                            style={{ width: '100%' }}
-                            placeholder='Chọn chấp hành đích'
+                            style={{ width: "100%" }}
+                            placeholder="Chọn chấp hành đích"
                             value={ruleDraft.fanFeed || undefined}
-                            options={actuatorRuleOptions.length > 0 ? actuatorRuleOptions : fanRuleOptions}
+                            options={
+                              actuatorRuleOptions.length > 0
+                                ? actuatorRuleOptions
+                                : fanRuleOptions
+                            }
                             onChange={(value) =>
-                              setRuleDraft((prev) => ({ ...prev, fanFeed: value }))
+                              setRuleDraft((prev) => ({
+                                ...prev,
+                                fanFeed: value,
+                              }))
                             }
                           />
                         </Col>
@@ -2260,9 +2826,9 @@ export default function OperatorMachineDetailPage() {
                           <InputNumber
                             min={0}
                             max={100}
-                            style={{ width: '100%' }}
+                            style={{ width: "100%" }}
                             value={ruleDraft.fanLevelOn}
-                            addonBefore='Quạt bật %'
+                            addonBefore="Quạt bật %"
                             onChange={(value) =>
                               setRuleDraft((prev) => ({
                                 ...prev,
@@ -2271,13 +2837,13 @@ export default function OperatorMachineDetailPage() {
                             }
                           />
                         </Col>
-                        <Col xs={24} md={8}>
+                        <Col xs={24} md={6}>
                           <InputNumber
                             min={0}
                             max={100}
-                            style={{ width: '100%' }}
+                            style={{ width: "100%" }}
                             value={ruleDraft.fanLevelOff}
-                            addonBefore='Quạt tắt %'
+                            addonBefore="Quạt tắt %"
                             onChange={(value) =>
                               setRuleDraft((prev) => ({
                                 ...prev,
@@ -2286,26 +2852,28 @@ export default function OperatorMachineDetailPage() {
                             }
                           />
                         </Col>
-                        <Col xs={24} md={4}>
-                          <InputNumber
-                            min={0}
-                            style={{ width: '100%' }}
-                            value={ruleDraft.priority}
-                            addonBefore='Ưu tiên'
-                            onChange={(value) =>
-                              setRuleDraft((prev) => ({
-                                ...prev,
-                                priority: Number(value ?? 0),
-                              }))
-                            }
-                          />
+                        <Col xs={24} md={6}>
+                          <Tooltip title="Mức độ ưu tiên cao hơn (chỉ số lớn hơn) sẽ thắng khi có xung đột kiểm soát cùng thiết bị.">
+                            <InputNumber
+                              min={0}
+                              style={{ width: "100%" }}
+                              value={ruleDraft.priority}
+                              addonBefore="Ưu tiên 🛈"
+                              onChange={(value) =>
+                                setRuleDraft((prev) => ({
+                                  ...prev,
+                                  priority: Number(value ?? 0),
+                                }))
+                              }
+                            />
+                          </Tooltip>
                         </Col>
-                        <Col xs={24} md={4}>
+                        <Col xs={24} md={8}>
                           <InputNumber
                             min={0}
-                            style={{ width: '100%' }}
+                            style={{ width: "100%" }}
                             value={ruleDraft.cooldownMs}
-                            addonBefore='Cooldown'
+                            addonBefore="Thời gian chờ (ms)"
                             onChange={(value) =>
                               setRuleDraft((prev) => ({
                                 ...prev,
@@ -2316,7 +2884,7 @@ export default function OperatorMachineDetailPage() {
                         </Col>
                         <Col xs={24} md={8}>
                           <Button
-                            type='primary'
+                            type="primary"
                             block
                             loading={savingRules}
                             onClick={() => void handleAddDynamicRule()}
@@ -2327,34 +2895,73 @@ export default function OperatorMachineDetailPage() {
                       </Row>
 
                       {dynamicFanRules.length === 0 ? (
-                        <Empty description='Chưa có quy tắc cho quạt' image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                        <Empty
+                          description="Chưa có quy tắc cho quạt"
+                          image={Empty.PRESENTED_IMAGE_SIMPLE}
+                        />
                       ) : (
-                        <Space direction='vertical' size={8} style={{ width: '100%' }}>
+                        <Space
+                          direction="vertical"
+                          size={8}
+                          style={{ width: "100%" }}
+                        >
                           {dynamicFanRules.map((rule) => (
-                            <Card size='small' key={rule.id}>
-                              <Row gutter={[8, 8]} align='middle'>
+                            <Card size="small" key={rule.id}>
+                              <Row gutter={[8, 8]} align="middle">
                                 <Col xs={24} md={16}>
                                   <Space size={8} wrap>
-                                    <Tag color={rule.enabled ? 'green' : 'default'}>{rule.id}</Tag>
-                                    <Tag color='red'>critical</Tag>
+                                    <Tag
+                                      color={rule.enabled ? "green" : "default"}
+                                    >
+                                      {rule.id}
+                                    </Tag>
+                                    <Tag
+                                      color={
+                                        rule.category === "critical"
+                                          ? "red"
+                                          : "gold"
+                                      }
+                                    >
+                                      {rule.category === "critical"
+                                        ? "Khẩn cấp"
+                                        : "Bình thường"}
+                                    </Tag>
                                     <Text>{rule.sensorFeed}</Text>
                                     <Tag>{rule.comparator}</Tag>
-                                    <Tag color='orange'>{rule.threshold}</Tag>
-                                    <Text>{'->'}</Text>
+                                    <Tag color="orange">{rule.threshold}</Tag>
+                                    <Text>{"->"}</Text>
                                     <Text>{rule.fanFeed}</Text>
-                                    <Tag color='blue'>ON {rule.fanLevelOn}%</Tag>
-                                    <Tag>OFF {rule.fanLevelOff}%</Tag>
-                                    <Tag color='purple'>P{rule.priority}</Tag>
-                                    <Tag>CD {rule.cooldownMs}ms</Tag>
+                                    <Tag color="blue">
+                                      BẬT {rule.fanLevelOn}%
+                                    </Tag>
+                                    <Tag>TẮT {rule.fanLevelOff}%</Tag>
+                                    <Tag color="purple">Ư{rule.priority}</Tag>
+                                    <Tag>Chờ {rule.cooldownMs}ms</Tag>
                                   </Space>
                                 </Col>
                                 <Col xs={24} md={8}>
-                                  <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
+                                  <Space
+                                    style={{
+                                      width: "100%",
+                                      justifyContent: "flex-end",
+                                    }}
+                                  >
                                     <Switch
                                       checked={rule.enabled}
-                                      onChange={(checked) => void handleToggleDynamicRule(rule.id, checked)}
+                                      onChange={(checked) =>
+                                        void handleToggleDynamicRule(
+                                          rule.id,
+                                          checked,
+                                        )
+                                      }
                                     />
-                                    <Button danger size='small' onClick={() => void handleDeleteDynamicRule(rule.id)}>
+                                    <Button
+                                      danger
+                                      size="small"
+                                      onClick={() =>
+                                        void handleDeleteDynamicRule(rule.id)
+                                      }
+                                    >
                                       Xóa
                                     </Button>
                                   </Space>
@@ -2365,16 +2972,59 @@ export default function OperatorMachineDetailPage() {
                         </Space>
                       )}
 
-                      <Divider style={{ margin: '8px 0' }} />
+                      {/* Conflict simulation modal */}
+                      <Modal
+                        open={showConflictModal}
+                        title="Kết quả mô phỏng xung đột"
+                        onCancel={() => setShowConflictModal(false)}
+                        footer={null}
+                        width={700}
+                      >
+                        <Space direction="vertical" style={{ width: "100%" }}>
+                          {conflictSimulationResult.length === 0 ? (
+                            <Text>Không có actuator để mô phỏng.</Text>
+                          ) : (
+                            conflictSimulationResult.map((r) => (
+                              <Card key={r.fanFeed} size="small">
+                                <Row align="middle">
+                                  <Col span={10}>
+                                    <Text strong>{r.fanFeed}</Text>
+                                  </Col>
+                                  <Col span={8}>
+                                    {r.triggered ? (
+                                      <Text>
+                                        {r.level !== null
+                                          ? `${r.level}%`
+                                          : "---"}
+                                      </Text>
+                                    ) : (
+                                      <Text type="secondary">
+                                        Không kích hoạt
+                                      </Text>
+                                    )}
+                                  </Col>
+                                  <Col span={6}>
+                                    <Text type="secondary">
+                                      {r.source ?? r.note ?? ""}
+                                    </Text>
+                                  </Col>
+                                </Row>
+                              </Card>
+                            ))
+                          )}
+                        </Space>
+                      </Modal>
+
+                      <Divider style={{ margin: "8px 0" }} />
                       <Text strong>2) Nhóm quy tắc thông thường (AND/OR)</Text>
                       <Row gutter={[8, 8]}>
                         <Col xs={24} md={5}>
                           <Select
-                            style={{ width: '100%' }}
+                            style={{ width: "100%" }}
                             value={groupDraft.operator}
                             options={[
-                              { value: 'AND', label: 'AND' },
-                              { value: 'OR', label: 'OR' },
+                              { value: "AND", label: "VÀ" },
+                              { value: "OR", label: "HOẶC" },
                             ]}
                             onChange={(value) =>
                               setGroupDraft((prev) => ({
@@ -2384,56 +3034,129 @@ export default function OperatorMachineDetailPage() {
                             }
                           />
                         </Col>
-                        <Col xs={24} md={9}>
-                          <Select
-                            style={{ width: '100%' }}
-                            placeholder='Cảm biến điều kiện'
-                            value={groupDraft.sensorFeed || undefined}
-                            options={sensorRuleOptions}
-                            onChange={(value) =>
-                              setGroupDraft((prev) => ({ ...prev, sensorFeed: value }))
-                            }
-                          />
-                        </Col>
-                        <Col xs={24} md={4}>
-                          <Select
-                            style={{ width: '100%' }}
-                            value={groupDraft.comparator}
-                            options={[
-                              { value: 'gte', label: '>=' },
-                              { value: 'lte', label: '<=' },
-                            ]}
-                            onChange={(value) =>
+                        <Col xs={24} md={19}>
+                          {/* Conditions list editor */}
+                          {(groupDraft.conditions || []).map((cond, idx) => (
+                            <Row
+                              gutter={[8, 8]}
+                              key={`cond-${idx}`}
+                              style={{ marginBottom: 8 }}
+                            >
+                              <Col xs={24} md={10}>
+                                <Select
+                                  style={{ width: "100%" }}
+                                  placeholder="Cảm biến điều kiện"
+                                  value={cond.sensorFeed || undefined}
+                                  options={sensorRuleOptions}
+                                  onChange={(value) =>
+                                    setGroupDraft((prev) => ({
+                                      ...prev,
+                                      conditions: prev.conditions.map((c, i) =>
+                                        i === idx
+                                          ? { ...c, sensorFeed: value }
+                                          : c,
+                                      ),
+                                    }))
+                                  }
+                                />
+                              </Col>
+                              <Col xs={8} md={4}>
+                                <Select
+                                  style={{ width: "100%" }}
+                                  value={cond.comparator}
+                                  options={[
+                                    { value: "gte", label: ">=" },
+                                    { value: "lte", label: "<=" },
+                                  ]}
+                                  onChange={(value) =>
+                                    setGroupDraft((prev) => ({
+                                      ...prev,
+                                      conditions: prev.conditions.map((c, i) =>
+                                        i === idx
+                                          ? {
+                                              ...c,
+                                              comparator:
+                                                value as DynamicFanComparator,
+                                            }
+                                          : c,
+                                      ),
+                                    }))
+                                  }
+                                />
+                              </Col>
+                              <Col xs={8} md={6}>
+                                <InputNumber
+                                  style={{ width: "100%" }}
+                                  value={cond.threshold}
+                                  onChange={(value) =>
+                                    setGroupDraft((prev) => ({
+                                      ...prev,
+                                      conditions: prev.conditions.map((c, i) =>
+                                        i === idx
+                                          ? {
+                                              ...c,
+                                              threshold: Number(value ?? 0),
+                                            }
+                                          : c,
+                                      ),
+                                    }))
+                                  }
+                                  placeholder="Ngưỡng"
+                                />
+                              </Col>
+                              <Col xs={8} md={4}>
+                                <Button
+                                  danger
+                                  onClick={() =>
+                                    setGroupDraft((prev) => ({
+                                      ...prev,
+                                      conditions: prev.conditions.filter(
+                                        (_, i) => i !== idx,
+                                      ),
+                                    }))
+                                  }
+                                >
+                                  Xóa
+                                </Button>
+                              </Col>
+                            </Row>
+                          ))}
+                          <Button
+                            type="dashed"
+                            onClick={() =>
                               setGroupDraft((prev) => ({
                                 ...prev,
-                                comparator: value as DynamicFanComparator,
+                                conditions: [
+                                  ...(prev.conditions || []),
+                                  {
+                                    sensorFeed: "",
+                                    comparator: "gte",
+                                    threshold: 60,
+                                  },
+                                ],
                               }))
                             }
-                          />
-                        </Col>
-                        <Col xs={24} md={6}>
-                          <InputNumber
-                            style={{ width: '100%' }}
-                            value={groupDraft.threshold}
-                            onChange={(value) =>
-                              setGroupDraft((prev) => ({
-                                ...prev,
-                                threshold: Number(value ?? 0),
-                              }))
-                            }
-                            placeholder='Ngưỡng'
-                          />
+                          >
+                            Thêm điều kiện
+                          </Button>
                         </Col>
                       </Row>
                       <Row gutter={[8, 8]}>
                         <Col xs={24} md={8}>
                           <Select
-                            style={{ width: '100%' }}
-                            placeholder='Chấp hành đầu ra'
+                            style={{ width: "100%" }}
+                            placeholder="Chấp hành đầu ra"
                             value={groupDraft.fanFeed || undefined}
-                            options={actuatorRuleOptions.length > 0 ? actuatorRuleOptions : fanRuleOptions}
+                            options={
+                              actuatorRuleOptions.length > 0
+                                ? actuatorRuleOptions
+                                : fanRuleOptions
+                            }
                             onChange={(value) =>
-                              setGroupDraft((prev) => ({ ...prev, fanFeed: value }))
+                              setGroupDraft((prev) => ({
+                                ...prev,
+                                fanFeed: value,
+                              }))
                             }
                           />
                         </Col>
@@ -2441,9 +3164,9 @@ export default function OperatorMachineDetailPage() {
                           <InputNumber
                             min={0}
                             max={100}
-                            style={{ width: '100%' }}
+                            style={{ width: "100%" }}
                             value={groupDraft.fanLevelOn}
-                            addonBefore='ON %'
+                            addonBefore="BẬT %"
                             onChange={(value) =>
                               setGroupDraft((prev) => ({
                                 ...prev,
@@ -2456,9 +3179,9 @@ export default function OperatorMachineDetailPage() {
                           <InputNumber
                             min={0}
                             max={100}
-                            style={{ width: '100%' }}
+                            style={{ width: "100%" }}
                             value={groupDraft.fanLevelOff}
-                            addonBefore='OFF %'
+                            addonBefore="TẮT %"
                             onChange={(value) =>
                               setGroupDraft((prev) => ({
                                 ...prev,
@@ -2467,26 +3190,28 @@ export default function OperatorMachineDetailPage() {
                             }
                           />
                         </Col>
-                        <Col xs={24} md={4}>
-                          <InputNumber
-                            min={0}
-                            style={{ width: '100%' }}
-                            value={groupDraft.priority}
-                            addonBefore='Prio'
-                            onChange={(value) =>
-                              setGroupDraft((prev) => ({
-                                ...prev,
-                                priority: Number(value ?? 0),
-                              }))
-                            }
-                          />
+                        <Col xs={24} md={6}>
+                          <Tooltip title="Mức độ ưu tiên cao hơn (chỉ số lớn hơn) sẽ thắng khi có xung đột kiểm soát cùng thiết bị.">
+                            <InputNumber
+                              min={0}
+                              style={{ width: "100%" }}
+                              value={groupDraft.priority}
+                              addonBefore="Ưu tiên 🛈"
+                              onChange={(value) =>
+                                setGroupDraft((prev) => ({
+                                  ...prev,
+                                  priority: Number(value ?? 0),
+                                }))
+                              }
+                            />
+                          </Tooltip>
                         </Col>
-                        <Col xs={24} md={4}>
+                        <Col xs={24} md={8}>
                           <InputNumber
                             min={0}
-                            style={{ width: '100%' }}
+                            style={{ width: "100%" }}
                             value={groupDraft.cooldownMs}
-                            addonBefore='Thời gian chờ (ms)'
+                            addonBefore="Thời gian chờ (ms)"
                             onChange={(value) =>
                               setGroupDraft((prev) => ({
                                 ...prev,
@@ -2497,7 +3222,7 @@ export default function OperatorMachineDetailPage() {
                         </Col>
                       </Row>
                       <Button
-                        type='dashed'
+                        type="dashed"
                         loading={savingRules}
                         onClick={() => void handleAddGroupRule()}
                       >
@@ -2505,46 +3230,91 @@ export default function OperatorMachineDetailPage() {
                       </Button>
 
                       {dynamicFanGroups.length === 0 ? (
-                        <Empty description='Chưa có rule group cho vận hành thường' image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                        <Empty
+                          description="Chưa có rule group cho vận hành thường"
+                          image={Empty.PRESENTED_IMAGE_SIMPLE}
+                        />
                       ) : (
-                        <Space direction='vertical' size={8} style={{ width: '100%' }}>
+                        <Space
+                          direction="vertical"
+                          size={8}
+                          style={{ width: "100%" }}
+                        >
                           {dynamicFanGroups.map((group) => {
-                            const firstCondition = group.conditions[0];
                             const firstOutput = group.outputs[0];
                             return (
-                              <Card size='small' key={group.id}>
-                                <Row gutter={[8, 8]} align='middle'>
+                              <Card size="small" key={group.id}>
+                                <Row gutter={[8, 8]} align="middle">
                                   <Col xs={24} md={16}>
-                                    <Space size={8} wrap>
-                                      <Tag color={group.enabled ? 'green' : 'default'}>{group.id}</Tag>
-                                      <Tag color='blue'>{group.operator}</Tag>
-                                      <Tag color='gold'>normal</Tag>
-                                      {firstCondition ? (
-                                        <>
-                                          <Text>{firstCondition.sensorFeed}</Text>
-                                          <Tag>{firstCondition.comparator}</Tag>
-                                          <Tag color='orange'>{firstCondition.threshold}</Tag>
-                                        </>
-                                      ) : null}
-                                      <Text>{'->'}</Text>
-                                      {firstOutput ? (
-                                        <>
-                                          <Text>{firstOutput.fanFeed}</Text>
-                                          <Tag color='blue'>ON {firstOutput.fanLevelOn}%</Tag>
-                                          <Tag>OFF {firstOutput.fanLevelOff}%</Tag>
-                                        </>
-                                      ) : null}
-                                      <Tag color='purple'>P{group.priority}</Tag>
-                                      <Tag>CD {group.cooldownMs}ms</Tag>
+                                    <Space
+                                      direction="vertical"
+                                      size={4}
+                                      style={{ width: "100%" }}
+                                    >
+                                      <Space size={8} wrap align="center">
+                                        <Tag
+                                          color={
+                                            group.enabled ? "green" : "default"
+                                          }
+                                        >
+                                          {group.id}
+                                        </Tag>
+                                        {group.conditions.map(
+                                          (condition, idx) => (
+                                            <Space
+                                              key={`${group.id}-${idx}`}
+                                              size={4}
+                                              wrap
+                                            >
+                                              {idx > 0 ? (
+                                                <Tag color="default">
+                                                  {group.operator}
+                                                </Tag>
+                                              ) : null}
+                                              <Text>
+                                                {condition.sensorFeed}
+                                              </Text>
+                                              <Tag>{condition.comparator}</Tag>
+                                              <Tag color="orange">
+                                                {condition.threshold}
+                                              </Tag>
+                                            </Space>
+                                          ),
+                                        )}
+                                        <Text>{"->"}</Text>
+                                        {firstOutput ? (
+                                          <>
+                                            <Text>{firstOutput.fanFeed}</Text>
+                                            <Tag color="blue">
+                                              BẬT {firstOutput.fanLevelOn}%
+                                            </Tag>
+                                            <Tag>
+                                              TẮT {firstOutput.fanLevelOff}%
+                                            </Tag>
+                                          </>
+                                        ) : null}
+                                      </Space>
+                                      <Space size={8} wrap>
+                                        <Tag color="purple">
+                                          Ư{group.priority}
+                                        </Tag>
+                                        <Tag>Chờ {group.cooldownMs}ms</Tag>
+                                      </Space>
                                     </Space>
                                   </Col>
                                   <Col xs={24} md={8}>
-                                    <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
-                                      <Switch
-                                        checked={group.enabled}
-                                        onChange={(checked) => void handleToggleGroupRule(group.id, checked)}
-                                      />
-                                      <Button danger size='small' onClick={() => void handleDeleteGroupRule(group.id)}>
+                                    <Space
+                                      style={{
+                                        width: "100%",
+                                      }}
+                                    >
+                                      <Button
+                                        danger
+                                        size="small"
+                                        onClick={() =>
+                                          void handleDeleteGroupRule(group.id)
+                                        }
+                                      >
                                         Xóa
                                       </Button>
                                     </Space>
@@ -2556,15 +3326,15 @@ export default function OperatorMachineDetailPage() {
                         </Space>
                       )}
 
-                      <Divider style={{ margin: '8px 0' }} />
-                      <Text strong>3) Conflict Resolution</Text>
-                      <Row gutter={[8, 8]} align='middle'>
+                      <Divider style={{ margin: "8px 0" }} />
+                      <Text strong>3) Điều phối xung đột</Text>
+                      <Row gutter={[8, 8]} align="middle">
                         <Col xs={24} md={8}>
                           <InputNumber
                             min={0}
-                            style={{ width: '100%' }}
+                            style={{ width: "100%" }}
                             value={conflictSettings.defaultCooldownMs}
-                            addonBefore='Thời gian mặc định'
+                            addonBefore="Thời gian mặc định"
                             onChange={(value) =>
                               setConflictSettings((prev) => ({
                                 ...prev,
@@ -2576,7 +3346,9 @@ export default function OperatorMachineDetailPage() {
                         <Col xs={24} md={8}>
                           <Space>
                             <Switch
-                              checked={conflictSettings.allowEqualPriorityTakeover}
+                              checked={
+                                conflictSettings.allowEqualPriorityTakeover
+                              }
                               onChange={(checked) =>
                                 setConflictSettings((prev) => ({
                                   ...prev,
@@ -2584,7 +3356,10 @@ export default function OperatorMachineDetailPage() {
                                 }))
                               }
                             />
-                            <Text>Cho phép chuyển quyền điều khiển giữa các quy tắc cùng mức độ ưu tiên</Text>
+                            <Text>
+                              Cho phép chuyển quyền điều khiển giữa các quy tắc
+                              cùng mức độ ưu tiên
+                            </Text>
                           </Space>
                         </Col>
                         <Col xs={24} md={8}>
@@ -2599,7 +3374,6 @@ export default function OperatorMachineDetailPage() {
                       </Row>
                     </Space>
                   </Card>
-
                 </Space>
               ) : null}
             </Space>
@@ -2608,22 +3382,40 @@ export default function OperatorMachineDetailPage() {
           <Card
             style={{ borderRadius: 14, marginBottom: 18 }}
             title={
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontWeight: 600 }}>Diễn biến nhiệt độ & độ ẩm (trung bình)</span>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                }}
+              >
+                <span style={{ fontWeight: 600 }}>
+                  Diễn biến nhiệt độ & độ ẩm (trung bình)
+                </span>
                 {isRunning && (
-                  <Badge status="processing" text={<Text style={{ fontSize: 12 }}>Đang cập nhật</Text>} />
+                  <Badge
+                    status="processing"
+                    text={<Text style={{ fontSize: 12 }}>Đang cập nhật</Text>}
+                  />
                 )}
               </div>
             }
           >
             {isRunning && (hasTemperatureFeed || hasHumidityFeed) ? (
               <ResponsiveContainer width="100%" height={260}>
-                <LineChart data={history} margin={{ top: 5, right: 24, left: -10, bottom: 5 }}>
+                <LineChart
+                  data={history}
+                  margin={{ top: 5, right: 24, left: -10, bottom: 5 }}
+                >
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                  <XAxis dataKey="time" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
+                  <XAxis
+                    dataKey="time"
+                    tick={{ fontSize: 11 }}
+                    interval="preserveStartEnd"
+                  />
                   <YAxis
                     yAxisId="temp"
-                    domain={['auto', 'auto']}
+                    domain={["auto", "auto"]}
                     tick={{ fontSize: 11 }}
                     tickFormatter={(v) => `${v}°`}
                     width={38}
@@ -2631,20 +3423,26 @@ export default function OperatorMachineDetailPage() {
                   <YAxis
                     yAxisId="hum"
                     orientation="right"
-                    domain={['auto', 'auto']}
+                    domain={["auto", "auto"]}
                     tick={{ fontSize: 11 }}
                     tickFormatter={(v) => `${v}%`}
                     width={38}
                   />
                   <ReTooltip
-                    contentStyle={{ borderRadius: 10, border: '1px solid #f0f0f0', fontSize: 13 }}
+                    contentStyle={{
+                      borderRadius: 10,
+                      border: "1px solid #f0f0f0",
+                      fontSize: 13,
+                    }}
                     formatter={(val: number, name: string) => [
-                      name === 'temperature' ? `${val}°C` : `${val}%`,
-                      name === 'temperature' ? 'Nhiệt độ' : 'Độ ẩm',
+                      name === "temperature" ? `${val}°C` : `${val}%`,
+                      name === "temperature" ? "Nhiệt độ" : "Độ ẩm",
                     ]}
                   />
                   <Legend
-                    formatter={(n) => n === 'temperature' ? 'Nhiệt độ (°C)' : 'Độ ẩm (%)'}
+                    formatter={(n) =>
+                      n === "temperature" ? "Nhiệt độ (°C)" : "Độ ẩm (%)"
+                    }
                     iconType="circle"
                     iconSize={9}
                   />
@@ -2657,7 +3455,7 @@ export default function OperatorMachineDetailPage() {
                       stroke="#ff7a00"
                       strokeWidth={2.5}
                       dot={false}
-                      activeDot={{ r: 5, fill: '#ff7a00' }}
+                      activeDot={{ r: 5, fill: "#ff7a00" }}
                     />
                   )}
                   {hasHumidityFeed && (
@@ -2669,7 +3467,7 @@ export default function OperatorMachineDetailPage() {
                       stroke="#1677ff"
                       strokeWidth={2.5}
                       dot={false}
-                      activeDot={{ r: 5, fill: '#1677ff' }}
+                      activeDot={{ r: 5, fill: "#1677ff" }}
                     />
                   )}
                 </LineChart>
@@ -2678,40 +3476,52 @@ export default function OperatorMachineDetailPage() {
               <div
                 style={{
                   height: 260,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: '#bfbfbf',
-                  background: '#fafafa',
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  color: "#bfbfbf",
+                  background: "#fafafa",
                   borderRadius: 10,
                 }}
               >
-                <PauseCircleOutlined style={{ fontSize: 48, marginBottom: 12 }} />
+                <PauseCircleOutlined
+                  style={{ fontSize: 48, marginBottom: 12 }}
+                />
                 <Text type="secondary">
                   {isRunning
-                    ? 'Thiết bị chưa cấu hình feed nhiệt độ/độ ẩm để hiển thị biểu đồ'
-                    : 'Biểu đồ sẽ hiển thị khi máy đang chạy'}
+                    ? "Thiết bị chưa cấu hình feed nhiệt độ/độ ẩm để hiển thị biểu đồ"
+                    : "Biểu đồ sẽ hiển thị khi máy đang chạy"}
                 </Text>
               </div>
             )}
           </Card>
 
           <Row gutter={[14, 14]}>
-            {typeof calculatedProgress === 'number' && (
+            {typeof calculatedProgress === "number" && (
               <Col span={24}>
-                <Card style={{ borderRadius: 12 }} styles={{ body: { padding: '16px 20px' } }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, alignItems: 'center' }}>
+                <Card
+                  style={{ borderRadius: 12 }}
+                  styles={{ body: { padding: "16px 20px" } }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      marginBottom: 8,
+                      alignItems: "center",
+                    }}
+                  >
                     <Text strong>Tiến độ máy sấy</Text>
-                    <Text strong style={{ fontSize: 18, color: '#1677ff' }}>
+                    <Text strong style={{ fontSize: 18, color: "#1677ff" }}>
                       {Math.round(calculatedProgress)}%
                     </Text>
                   </div>
                   <Progress
                     percent={Math.round(calculatedProgress)}
-                    strokeColor={{ '0%': '#1677ff', '100%': '#52c41a' }}
-                    size={['100%', 14]}
-                    status={calculatedProgress === 100 ? 'success' : 'active'}
+                    strokeColor={{ "0%": "#1677ff", "100%": "#52c41a" }}
+                    size={["100%", 14]}
+                    status={calculatedProgress === 100 ? "success" : "active"}
                   />
                 </Card>
               </Col>
@@ -2721,30 +3531,34 @@ export default function OperatorMachineDetailPage() {
               <Card
                 style={{
                   borderRadius: 12,
-                  textAlign: 'center',
-                  border: doorOpen ? '2px solid #ffccc7' : '1px solid #f0f0f0',
-                  background: doorOpen ? '#fff2f0' : '#fff',
+                  textAlign: "center",
+                  border: doorOpen ? "2px solid #ffccc7" : "1px solid #f0f0f0",
+                  background: doorOpen ? "#fff2f0" : "#fff",
                 }}
-                styles={{ body: { padding: '20px 16px' } }}
+                styles={{ body: { padding: "20px 16px" } }}
               >
                 <div style={{ fontSize: 42, marginBottom: 8, lineHeight: 1 }}>
-                  {doorOpen ? '🚪' : '🔒'}
+                  {doorOpen ? "🚪" : "🔒"}
                 </div>
-                <Text strong style={{ display: 'block', marginBottom: 6 }}>Cửa buồng sấy</Text>
+                <Text strong style={{ display: "block", marginBottom: 6 }}>
+                  Cửa buồng sấy
+                </Text>
                 <Tag
-                  color={doorOpen ? 'error' : 'success'}
-                  style={{ borderRadius: 20, padding: '3px 12px' }}
+                  color={doorOpen ? "error" : "success"}
+                  style={{ borderRadius: 20, padding: "3px 12px" }}
                 >
-                  {doorOpen ? 'Đang mở' : 'Đã đóng'}
+                  {doorOpen ? "Đang mở" : "Đã đóng"}
                 </Tag>
                 {doorOpen && (
                   <div style={{ marginTop: 6 }}>
-                    <Text type="danger" style={{ fontSize: 11 }}>Cảnh báo: Cửa đang mở</Text>
+                    <Text type="danger" style={{ fontSize: 11 }}>
+                      Cảnh báo: Cửa đang mở
+                    </Text>
                   </div>
                 )}
                 <div style={{ marginTop: 6 }}>
                   <Text type="secondary" style={{ fontSize: 11 }}>
-                    Ngưỡng mở cửa: lux {'>'} {DOOR_OPEN_LUX}
+                    Ngưỡng mở cửa: lux {">"} {DOOR_OPEN_LUX}
                   </Text>
                 </div>
               </Card>
@@ -2752,13 +3566,23 @@ export default function OperatorMachineDetailPage() {
 
             <Col xs={12}>
               <Card
-                style={{ borderRadius: 12, textAlign: 'center' }}
-                styles={{ body: { padding: '20px 16px' } }}
+                style={{ borderRadius: 12, textAlign: "center" }}
+                styles={{ body: { padding: "20px 16px" } }}
               >
-                <div style={{ fontSize: 42, marginBottom: 8, lineHeight: 1 }}>⏱</div>
-                <Text strong style={{ display: 'block', marginBottom: 6 }}>Thời gian chạy</Text>
-                <Text style={{ fontSize: 20, fontWeight: 700, color: isRunning ? '#1677ff' : '#8c8c8c' }}>
-                  {isRunning ? elapsed : '--'}
+                <div style={{ fontSize: 42, marginBottom: 8, lineHeight: 1 }}>
+                  ⏱
+                </div>
+                <Text strong style={{ display: "block", marginBottom: 6 }}>
+                  Thời gian chạy
+                </Text>
+                <Text
+                  style={{
+                    fontSize: 20,
+                    fontWeight: 700,
+                    color: isRunning ? "#1677ff" : "#8c8c8c",
+                  }}
+                >
+                  {isRunning ? elapsed : "--"}
                 </Text>
               </Card>
             </Col>
@@ -2767,45 +3591,61 @@ export default function OperatorMachineDetailPage() {
 
         <Col xs={24} lg={9} xl={8}>
           <Card
-            style={{ borderRadius: 14, position: 'sticky', top: 80 }}
+            style={{ borderRadius: 14, position: "sticky", top: 80 }}
             title={<span style={{ fontWeight: 600 }}>Bảng điều khiển</span>}
           >
             {(isIdle || isError) && (
               <div style={{ marginBottom: 16 }}>
-                <Text strong style={{ display: 'block', marginBottom: 8, fontSize: 14 }}>
-                  <BookOutlined style={{ color: '#1677ff', marginRight: 6 }} />
+                <Text
+                  strong
+                  style={{ display: "block", marginBottom: 8, fontSize: 14 }}
+                >
+                  <BookOutlined style={{ color: "#1677ff", marginRight: 6 }} />
                   Chọn công thức sấy để khởi động nhanh
                 </Text>
                 <Select
                   placeholder="Chọn công thức sấy..."
                   value={selectedRecipeId ?? undefined}
                   onChange={(value) => setSelectedRecipeId(value)}
-                  style={{ width: '100%' }}
+                  style={{ width: "100%" }}
                   size="large"
                   options={recipes.map((recipe) => ({
                     value: recipe.id,
-                    label: `${recipe.name} - ${recipe.temp}°C · ${formatDuration(recipe.duration)}`,                  }))}
+                    label: `${recipe.name} - ${recipe.temp}°C · ${formatDuration(recipe.duration)}`,
+                  }))}
                 />
                 {selectedRecipe && (
                   <div
                     style={{
                       marginTop: 10,
-                      padding: '10px 14px',
-                      background: '#f6ffed',
+                      padding: "10px 14px",
+                      background: "#f6ffed",
                       borderRadius: 10,
-                      border: '1px solid #b7eb8f',
+                      border: "1px solid #b7eb8f",
                     }}
                   >
-                    <Text style={{ fontSize: 13, color: '#389e0d' }}>
+                    <Text style={{ fontSize: 13, color: "#389e0d" }}>
                       <CheckCircleOutlined style={{ marginRight: 6 }} />
                       {selectedRecipe.name}
                     </Text>
-                    <div style={{ display: 'flex', gap: 10, marginTop: 4, flexWrap: 'wrap' }}>
-                      <Text type="secondary" style={{ fontSize: 12 }}>Nhiệt độ: {selectedRecipe.temp}°C</Text>
-                      <Text type="secondary" style={{ fontSize: 12 }}>Độ ẩm: {selectedRecipe.humidity}%</Text>
-<Text type="secondary" style={{ fontSize: 12 }}>
-  Thời lượng: {formatDuration(selectedRecipe.duration)}
-</Text>                    </div>
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: 10,
+                        marginTop: 4,
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        Nhiệt độ: {selectedRecipe.temp}°C
+                      </Text>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        Độ ẩm: {selectedRecipe.humidity}%
+                      </Text>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        Thời lượng: {formatDuration(selectedRecipe.duration)}
+                      </Text>{" "}
+                    </div>
                   </div>
                 )}
               </div>
@@ -2824,8 +3664,8 @@ export default function OperatorMachineDetailPage() {
                   borderRadius: 14,
                   fontSize: 17,
                   fontWeight: 800,
-                  background: selectedRecipeId ? '#52c41a' : undefined,
-                  borderColor: selectedRecipeId ? '#52c41a' : undefined,
+                  background: selectedRecipeId ? "#52c41a" : undefined,
+                  borderColor: selectedRecipeId ? "#52c41a" : undefined,
                   marginBottom: 14,
                 }}
               >
@@ -2852,11 +3692,18 @@ export default function OperatorMachineDetailPage() {
             )}
 
             <div style={{ marginBottom: 16 }}>
-              <Text strong style={{ display: 'block', marginBottom: 8, fontSize: 14 }}>
+              <Text
+                strong
+                style={{ display: "block", marginBottom: 8, fontSize: 14 }}
+              >
                 Setpoint nhiệt độ & độ ẩm
               </Text>
-              <Card size="small" style={{ borderRadius: 10, marginBottom: 10 }} styles={{ body: { padding: 12 } }}>
-                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+              <Card
+                size="small"
+                style={{ borderRadius: 10, marginBottom: 10 }}
+                styles={{ body: { padding: 12 } }}
+              >
+                <Space direction="vertical" size={8} style={{ width: "100%" }}>
                   <div>
                     <Text type="secondary">Nhiệt độ mục tiêu</Text>
                     <Slider
@@ -2866,12 +3713,12 @@ export default function OperatorMachineDetailPage() {
                       value={visibleTempSetpoint}
                       disabled={!isManualMode}
                       onChange={(value) => {
-                        if (typeof value === 'number') {
+                        if (typeof value === "number") {
                           setManualTempSetpoint(value);
                         }
                       }}
                       onChangeComplete={(value) => {
-                        if (typeof value === 'number') {
+                        if (typeof value === "number") {
                           void persistManualSetpoint({
                             manualTargetTemp: value,
                             manualTargetHumidity: manualHumiditySetpoint,
@@ -2882,8 +3729,8 @@ export default function OperatorMachineDetailPage() {
                     <Text style={{ fontSize: 12 }}>
                       {Math.round(visibleTempSetpoint)}°C
                       {!isManualMode && autoTempSetpoint !== null
-                        ? ` (từ ${currentStageSetpoint ? `giai đoạn ${currentStageSetpoint.stageOrder}` : 'công thức'} ${Math.round(autoTempSetpoint)}°C)`
-                        : ''}
+                        ? ` (từ ${currentStageSetpoint ? `giai đoạn ${currentStageSetpoint.stageOrder}` : "công thức"} ${Math.round(autoTempSetpoint)}°C)`
+                        : ""}
                     </Text>
                   </div>
 
@@ -2896,12 +3743,12 @@ export default function OperatorMachineDetailPage() {
                       value={visibleHumiditySetpoint}
                       disabled={!isManualMode}
                       onChange={(value) => {
-                        if (typeof value === 'number') {
+                        if (typeof value === "number") {
                           setManualHumiditySetpoint(value);
                         }
                       }}
                       onChangeComplete={(value) => {
-                        if (typeof value === 'number') {
+                        if (typeof value === "number") {
                           void persistManualSetpoint({
                             manualTargetTemp: manualTempSetpoint,
                             manualTargetHumidity: value,
@@ -2912,33 +3759,37 @@ export default function OperatorMachineDetailPage() {
                     <Text style={{ fontSize: 12 }}>
                       {Math.round(visibleHumiditySetpoint)}%
                       {!isManualMode && autoHumiditySetpoint !== null
-                        ? ` (từ ${currentStageSetpoint ? `giai đoạn ${currentStageSetpoint.stageOrder}` : 'công thức'} ${Math.round(autoHumiditySetpoint)}%)`
-                        : ''}
+                        ? ` (từ ${currentStageSetpoint ? `giai đoạn ${currentStageSetpoint.stageOrder}` : "công thức"} ${Math.round(autoHumiditySetpoint)}%)`
+                        : ""}
                     </Text>
                   </div>
 
-                  {savingSetpoint && <Text type="secondary">Đang lưu setpoint...</Text>}
+                  {savingSetpoint && (
+                    <Text type="secondary">Đang lưu setpoint...</Text>
+                  )}
                 </Space>
               </Card>
             </div>
 
             {isMaintenance && (
-              <div style={{ textAlign: 'center', padding: '16px 0 6px' }}>
-                <Tag color="warning" icon={<ToolOutlined />}>Thiết bị đang bảo trì</Tag>
+              <div style={{ textAlign: "center", padding: "16px 0 6px" }}>
+                <Tag color="warning" icon={<ToolOutlined />}>
+                  Thiết bị đang bảo trì
+                </Tag>
               </div>
             )}
 
-            <Divider style={{ margin: '12px 0 8px' }} />
-            <div style={{ textAlign: 'center' }}>
+            <Divider style={{ margin: "12px 0 8px" }} />
+            <div style={{ textAlign: "center" }}>
               <Text type="secondary" style={{ fontSize: 11 }}>
-                Thông số cập nhật lúc{' '}
+                Thông số cập nhật lúc{" "}
                 {lastUpdated
-                  ? lastUpdated.toLocaleTimeString('vi', {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                      second: '2-digit',
+                  ? lastUpdated.toLocaleTimeString("vi", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      second: "2-digit",
                     })
-                  : '--:--:--'}
+                  : "--:--:--"}
               </Text>
             </div>
           </Card>
@@ -2966,7 +3817,7 @@ export default function OperatorMachineDetailPage() {
           type="error"
           showIcon
           message="Cảnh báo thất thoát nhiệt"
-          description={`Lux hiện tại (${effectiveLight ?? '--'}) vượt ngưỡng mở cửa (${DOOR_OPEN_LUX}) quá ${HEAT_LOSS_DELAY_MS / 1000} giây khi máy đang chạy.`}
+          description={`Lux hiện tại (${effectiveLight ?? "--"}) vượt ngưỡng mở cửa (${DOOR_OPEN_LUX}) quá ${HEAT_LOSS_DELAY_MS / 1000} giây khi máy đang chạy.`}
         />
       )}
     </div>

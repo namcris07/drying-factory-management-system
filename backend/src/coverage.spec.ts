@@ -49,6 +49,7 @@ const createPrismaMock = () => {
       findUnique: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
+      count: jest.fn(),
     },
     alertResolution: {
       create: jest.fn(),
@@ -139,6 +140,7 @@ describe('Services coverage', () => {
   it('alerts service handles find/create/resolve flow', async () => {
     const service = new AlertsService(prisma as any);
     prisma.alert.findMany.mockResolvedValue([]);
+    prisma.alert.count.mockResolvedValue(0);
     prisma.alert.findUnique.mockResolvedValue({ alertID: 1 });
     prisma.alert.create.mockResolvedValue({ alertID: 1 });
     prisma.alert.update.mockResolvedValue({

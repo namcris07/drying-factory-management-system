@@ -432,6 +432,58 @@ async function main() {
   console.log('   op_c@drytech.io     / op123     (Operator – Zone D)');
   console.log('   op_d@drytech.io     / op123     (Operator – Zone E)');
   console.log('   op_e@drytech.io     / op123     (Operator – Zone F)');
+
+  console.log('');
+  await resetSequences(prisma);
+}
+
+async function resetSequences(prisma: any) {
+  console.log('🔄 Resetting PostgreSQL sequences...');
+  const tables = [
+    { table: 'Organizations', column: 'OrganizationID' },
+    { table: 'Factories', column: 'FactoryID' },
+    { table: 'Sites', column: 'SiteID' },
+    { table: 'User', column: 'userID' },
+    { table: 'Zones', column: 'ZoneID' },
+    { table: 'Devices', column: 'DeviceID' },
+    { table: 'Recipes', column: 'RecipeID' },
+    { table: 'RecipeStage', column: 'StageID' },
+    { table: 'RecipeSteps', column: 'StepID' },
+    { table: 'RecipeModification', column: 'RM_ID' },
+    { table: 'Batches', column: 'BatchesID' },
+    { table: 'BatchOperation', column: 'BO_ID' },
+    { table: 'SensorDataLog', column: 'LogID' },
+    { table: 'SystemConfigUpdate', column: 'SCU_ID' },
+    { table: 'Alerts', column: 'AlertID' },
+    { table: 'AlertResolution', column: 'AR_ID' },
+    { table: 'SensorChannels', column: 'SensorChannelID' },
+    { table: 'ActuatorChannels', column: 'ActuatorChannelID' },
+  ];
+
+  for (const { table, column } of tables) {
+    try {
+      const result = await prisma.$queryRawUnsafe(
+        `SELECT max("${column}") as max_id FROM "${table}"`
+      );
+      const maxId = result[0]?.max_id;
+      if (maxId !== undefined && maxId !== null) {
+        const seqResult = await prisma.$queryRawUnsafe(
+          `SELECT pg_get_serial_sequence('"${table}"', '${column}') as seq_name`
+        );
+        const seqName = seqResult[0]?.seq_name;
+        if (seqName) {
+          await prisma.$executeRawUnsafe(
+            `SELECT setval('${seqName}', ${maxId})`
+          );
+          console.log(`  ✓ Reset sequence for ${table}.${column} to ${maxId}`);
+        }
+      }
+    } catch (e: any) {
+      console.warn(
+        `  Warning: Could not reset sequence for ${table}.${column}: ${e.message}`
+      );
+    }
+  }
 }
 
 main()

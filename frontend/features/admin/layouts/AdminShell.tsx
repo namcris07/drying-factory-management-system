@@ -83,7 +83,7 @@ function AdminLayoutInner({ children }: AdminLayoutProps) {
           {!collapsed && (
             <div style={{ lineHeight: 1.3, overflow: 'hidden' }}>
               <div style={{ color: '#fff', fontWeight: 800, fontSize: 15, whiteSpace: 'nowrap' }}>DryTech</div>
-              <div style={{ color: '#ff7875', fontSize: 10, fontWeight: 700, letterSpacing: 1, whiteSpace: 'nowrap' }}>ADMIN CONSOLE</div>
+              <div style={{ color: '#ff7875', fontSize: 10, fontWeight: 700, letterSpacing: 1, whiteSpace: 'nowrap' }}>TRANG QUẢN TRỊ</div>
             </div>
           )}
         </div>
