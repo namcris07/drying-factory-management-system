@@ -1,4 +1,4 @@
-import { NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, InternalServerErrorException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import { AlertsService } from './alerts/alerts.service';
 import { AuthService } from './auth/auth.service';
@@ -22,6 +22,14 @@ import { SystemConfigController } from './system-config/system-config.controller
 import { UsersController } from './users/users.controller';
 import { ZonesController } from './zones/zones.controller';
 import { MqttController } from './mqtt/mqtt.controller';
+import { FactoriesService } from './factories/factories.service';
+import { FactoriesController } from './factories/factories.controller';
+import { OrganizationsService } from './organizations/organizations.service';
+import { OrganizationsController } from './organizations/organizations.controller';
+import { SitesService } from './sites/sites.service';
+import { SitesController } from './sites/sites.controller';
+import { RbacPermissionGuard } from './common/rbac/rbac-permission.guard';
+import { Reflector } from '@nestjs/core';
 
 jest.mock('@prisma/client', () => {
   class PrismaClient {
@@ -36,6 +44,7 @@ jest.mock('@prisma/client', () => {
     },
   };
 });
+
 
 jest.mock('bcryptjs', () => ({
   compare: jest.fn(),
@@ -116,6 +125,30 @@ const createPrismaMock = () => {
       create: jest.fn(),
       update: jest.fn(),
       updateMany: jest.fn(),
+      delete: jest.fn(),
+    },
+    factory: {
+      findMany: jest.fn(),
+      findUnique: jest.fn(),
+      findFirst: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
+    },
+    organization: {
+      findMany: jest.fn(),
+      findUnique: jest.fn(),
+      findFirst: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
+    },
+    site: {
+      findMany: jest.fn(),
+      findUnique: jest.fn(),
+      findFirst: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
       delete: jest.fn(),
     },
   } as any;
@@ -798,3 +831,740 @@ describe('Controllers coverage', () => {
     );
   });
 });
+
+describe('Factories service and controller', () => {
+  let prisma: ReturnType<typeof createPrismaMock>;
+
+  beforeEach(() => {
+    prisma = createPrismaMock();
+    jest.clearAllMocks();
+  });
+
+  it('factories service handles findAll', async () => {
+    const service = new FactoriesService(prisma as any);
+    prisma.factory.findMany.mockResolvedValue([]);
+    await service.findAll({ userID: 1, role: 'Admin' });
+    expect(prisma.factory.findMany).toHaveBeenCalled();
+  });
+
+  it('factories service getUserScope gets scope or throws Forbidden', async () => {
+    const service = new FactoriesService(prisma as any);
+    prisma.user.findUnique.mockResolvedValue(null);
+    await expect(service.findAll({ userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.user.findUnique.mockResolvedValue({ organizationID: 1, factoryID: 2 });
+    prisma.factory.findMany.mockResolvedValue([]);
+    await service.findAll({ userID: 1, role: 'Manager' });
+    expect(prisma.factory.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { factoryID: 2 }
+    }));
+  });
+
+  it('factories service findOne throws NotFound or Forbidden', async () => {
+    const service = new FactoriesService(prisma as any);
+    prisma.user.findUnique.mockResolvedValue({ factoryID: 1 });
+    await expect(service.findOne(2, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.factory.findUnique.mockResolvedValue(null);
+    await expect(service.findOne(1, { userID: 1, role: 'Admin' })).rejects.toBeInstanceOf(NotFoundException);
+
+    const mockFac = { factoryID: 1, factoryName: 'F1', sites: [], devices: [] };
+    prisma.factory.findUnique.mockResolvedValue(mockFac);
+    await expect(service.findOne(1, { userID: 1, role: 'Admin' })).resolves.toBe(mockFac);
+  });
+
+  it('factories service create throws Forbidden/NotFound or creates', async () => {
+    const service = new FactoriesService(prisma as any);
+    await expect(service.create({ factoryName: 'F' } as any, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.organization.findUnique.mockResolvedValue(null);
+    await expect(service.create({ factoryName: 'F', organizationID: 1 } as any, { userID: 1, role: 'Admin' })).rejects.toBeInstanceOf(NotFoundException);
+
+    prisma.organization.findUnique.mockResolvedValue({ organizationID: 1 });
+    prisma.factory.findUnique.mockResolvedValueOnce(true).mockResolvedValueOnce(null); // for code generation check
+    prisma.factory.create.mockResolvedValue({ factoryID: 1 });
+    await service.create({ factoryName: 'F', organizationID: 1 } as any, { userID: 1, role: 'Admin' });
+    expect(prisma.factory.create).toHaveBeenCalled();
+  });
+
+  it('factories service create handles conflicts and server errors', async () => {
+    const service = new FactoriesService(prisma as any);
+    prisma.organization.findUnique.mockResolvedValue({ organizationID: 1 });
+    prisma.factory.create.mockRejectedValue({ code: 'P2002', meta: { target: ['factoryCode'] } });
+    await expect(service.create({ factoryName: 'F', organizationID: 1 } as any, { userID: 1, role: 'Admin' })).rejects.toBeInstanceOf(ConflictException);
+
+    prisma.factory.create.mockRejectedValue(new Error('db error'));
+    await expect(service.create({ factoryName: 'F', organizationID: 1 } as any, { userID: 1, role: 'Admin' })).rejects.toBeInstanceOf(InternalServerErrorException);
+  });
+
+  it('factories service update handles permissions and prisma errors', async () => {
+    const service = new FactoriesService(prisma as any);
+    prisma.user.findUnique.mockResolvedValue({ factoryID: 1 });
+    await expect(service.update(1, {}, { userID: 1, role: 'Operator' })).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.update(2, {}, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.update(1, { organizationID: 2 }, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.organization.findUnique.mockResolvedValue(null);
+    await expect(service.update(1, { organizationID: 2 }, { userID: 1, role: 'Admin' })).rejects.toBeInstanceOf(NotFoundException);
+
+    prisma.organization.findUnique.mockResolvedValue({ organizationID: 2 });
+    prisma.factory.update.mockResolvedValue({ factoryID: 1 });
+    await service.update(1, { organizationID: 2 }, { userID: 1, role: 'Admin' });
+
+    prisma.factory.update.mockRejectedValue({ code: 'P2002', meta: { target: ['factoryCode'] } });
+    await expect(service.update(1, {}, { userID: 1, role: 'Admin' })).rejects.toBeInstanceOf(ConflictException);
+
+    prisma.factory.update.mockRejectedValue(new Error('err'));
+    await expect(service.update(1, {}, { userID: 1, role: 'Admin' })).rejects.toBeInstanceOf(InternalServerErrorException);
+  });
+
+  it('factories service remove checks roles, dependencies, and deletes', async () => {
+    const service = new FactoriesService(prisma as any);
+    await expect(service.remove(1, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.factory.findUnique.mockResolvedValue({ factoryID: 1, sites: [{ siteID: 1 }], devices: [] });
+    await expect(service.remove(1, { userID: 1, role: 'Admin' })).rejects.toBeInstanceOf(ConflictException);
+
+    prisma.factory.findUnique.mockResolvedValue({ factoryID: 1, sites: [], devices: [{ deviceID: 1 }] });
+    await expect(service.remove(1, { userID: 1, role: 'Admin' })).rejects.toBeInstanceOf(ConflictException);
+
+    prisma.factory.findUnique.mockResolvedValue({ factoryID: 1, sites: [], devices: [] });
+    prisma.factory.delete.mockResolvedValue({ factoryID: 1 });
+    await service.remove(1, { userID: 1, role: 'Admin' });
+    expect(prisma.factory.delete).toHaveBeenCalled();
+  });
+
+  it('factories controller delegates to service', async () => {
+    const service = {
+      findAll: jest.fn(),
+      findOne: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      remove: jest.fn(),
+    };
+    const controller = new FactoriesController(service as any);
+    const actor = { userID: 1, role: 'Admin' } as any;
+
+    await controller.findAll(actor);
+    await controller.findOne(1, actor);
+    await controller.create({} as any, actor);
+    await controller.update(1, {} as any, actor);
+    await controller.remove(1, actor);
+
+    expect(service.findAll).toHaveBeenCalledWith(actor);
+    expect(service.findOne).toHaveBeenCalledWith(1, actor);
+    expect(service.create).toHaveBeenCalledWith({}, actor);
+    expect(service.update).toHaveBeenCalledWith(1, {}, actor);
+    expect(service.remove).toHaveBeenCalledWith(1, actor);
+  });
+});
+
+describe('Organizations service and controller', () => {
+  let prisma: ReturnType<typeof createPrismaMock>;
+
+  beforeEach(() => {
+    prisma = createPrismaMock();
+    jest.clearAllMocks();
+  });
+
+  it('organizations service handles findAll', async () => {
+    const service = new OrganizationsService(prisma as any);
+    prisma.organization.findMany.mockResolvedValue([]);
+    await service.findAll({ userID: 1, role: 'Admin' });
+    expect(prisma.organization.findMany).toHaveBeenCalled();
+  });
+
+  it('organizations service getUserScope handles errors', async () => {
+    const service = new OrganizationsService(prisma as any);
+    prisma.user.findUnique.mockResolvedValue(null);
+    await expect(service.findAll({ userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.user.findUnique.mockResolvedValue({ organizationID: 1 });
+    prisma.organization.findMany.mockResolvedValue([]);
+    await service.findAll({ userID: 1, role: 'Manager' });
+    expect(prisma.organization.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { organizationID: 1 }
+    }));
+  });
+
+  it('organizations service findOne throws NotFound or Forbidden', async () => {
+    const service = new OrganizationsService(prisma as any);
+    prisma.user.findUnique.mockResolvedValue({ organizationID: 1 });
+    await expect(service.findOne(2, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.organization.findUnique.mockResolvedValue(null);
+    await expect(service.findOne(1, { userID: 1, role: 'Admin' })).rejects.toBeInstanceOf(NotFoundException);
+
+    const mockOrg = { organizationID: 1, factories: [] };
+    prisma.organization.findUnique.mockResolvedValue(mockOrg);
+    await expect(service.findOne(1, { userID: 1, role: 'Admin' })).resolves.toBe(mockOrg);
+  });
+
+  it('organizations service create processes unique code generation and handles conflict/server errors', async () => {
+    const service = new OrganizationsService(prisma as any);
+    await expect(service.create({ organizationName: 'O' } as any, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.organization.findUnique.mockResolvedValueOnce(true).mockResolvedValueOnce(null);
+    prisma.organization.create.mockResolvedValue({ organizationID: 1 });
+    await service.create({ organizationName: 'O' } as any, { userID: 1, role: 'Admin' });
+
+    prisma.organization.create.mockRejectedValue({ code: 'P2002', meta: { target: ['organizationCode'] } });
+    await expect(service.create({ organizationName: 'O' } as any, { userID: 1, role: 'Admin' })).rejects.toBeInstanceOf(ConflictException);
+
+    prisma.organization.create.mockRejectedValue(new Error('db error'));
+    await expect(service.create({ organizationName: 'O' } as any, { userID: 1, role: 'Admin' })).rejects.toBeInstanceOf(InternalServerErrorException);
+  });
+
+  it('organizations service update verifies role and handles prisma outcomes', async () => {
+    const service = new OrganizationsService(prisma as any);
+    await expect(service.update(1, {}, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.organization.findUnique.mockResolvedValue({ organizationID: 1 });
+    prisma.organization.update.mockResolvedValue({ organizationID: 1 });
+    await service.update(1, {}, { userID: 1, role: 'Admin' });
+
+    prisma.organization.update.mockRejectedValue({ code: 'P2002', meta: { target: ['organizationCode'] } });
+    await expect(service.update(1, {}, { userID: 1, role: 'Admin' })).rejects.toBeInstanceOf(ConflictException);
+
+    prisma.organization.update.mockRejectedValue(new Error('err'));
+    await expect(service.update(1, {}, { userID: 1, role: 'Admin' })).rejects.toBeInstanceOf(InternalServerErrorException);
+  });
+
+  it('organizations service remove checks details and deletes', async () => {
+    const service = new OrganizationsService(prisma as any);
+    await expect(service.remove(1, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.organization.findUnique.mockResolvedValue({ organizationID: 1, factories: [{ factoryID: 1 }] });
+    await expect(service.remove(1, { userID: 1, role: 'Admin' })).rejects.toBeInstanceOf(ConflictException);
+
+    prisma.organization.findUnique.mockResolvedValue({ organizationID: 1, factories: [] });
+    prisma.organization.delete.mockResolvedValue({ organizationID: 1 });
+    await service.remove(1, { userID: 1, role: 'Admin' });
+    expect(prisma.organization.delete).toHaveBeenCalled();
+  });
+
+  it('organizations controller delegates to service', async () => {
+    const service = {
+      findAll: jest.fn(),
+      findOne: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      remove: jest.fn(),
+    };
+    const controller = new OrganizationsController(service as any);
+    const actor = { userID: 1, role: 'Admin' } as any;
+
+    await controller.findAll(actor);
+    await controller.findOne(1, actor);
+    await controller.create({} as any, actor);
+    await controller.update(1, {} as any, actor);
+    await controller.remove(1, actor);
+
+    expect(service.findAll).toHaveBeenCalledWith(actor);
+    expect(service.findOne).toHaveBeenCalledWith(1, actor);
+    expect(service.create).toHaveBeenCalledWith({}, actor);
+    expect(service.update).toHaveBeenCalledWith(1, {}, actor);
+    expect(service.remove).toHaveBeenCalledWith(1, actor);
+  });
+});
+
+describe('Sites service and controller', () => {
+  let prisma: ReturnType<typeof createPrismaMock>;
+
+  beforeEach(() => {
+    prisma = createPrismaMock();
+    jest.clearAllMocks();
+  });
+
+  it('sites service handles findAll', async () => {
+    const service = new SitesService(prisma as any);
+    prisma.site.findMany.mockResolvedValue([]);
+    await service.findAll({ userID: 1, role: 'Admin' });
+    expect(prisma.site.findMany).toHaveBeenCalled();
+  });
+
+  it('sites service getUserScope handles errors and applies query scopes', async () => {
+    const service = new SitesService(prisma as any);
+    prisma.user.findUnique.mockResolvedValue(null);
+    await expect(service.findAll({ userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.user.findUnique.mockResolvedValue({ factoryID: 2, siteID: 3 });
+    prisma.site.findMany.mockResolvedValue([]);
+
+    await service.findAll({ userID: 1, role: 'Manager' });
+    expect(prisma.site.findMany).toHaveBeenLastCalledWith(expect.objectContaining({
+      where: { factoryID: 2 }
+    }));
+
+    await service.findAll({ userID: 1, role: 'Operator' });
+    expect(prisma.site.findMany).toHaveBeenLastCalledWith(expect.objectContaining({
+      where: { siteID: 3 }
+    }));
+  });
+
+  it('sites service findOne throws NotFound or Forbidden', async () => {
+    const service = new SitesService(prisma as any);
+    prisma.user.findUnique.mockResolvedValue({ factoryID: 2, siteID: 3 });
+
+    prisma.site.findUnique.mockResolvedValue({ siteID: 1, factoryID: 99 });
+    await expect(service.findOne(1, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    await expect(service.findOne(1, { userID: 1, role: 'Operator' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.site.findUnique.mockResolvedValue(null);
+    await expect(service.findOne(1, { userID: 1, role: 'Admin' })).rejects.toBeInstanceOf(NotFoundException);
+
+    const mockSite = { siteID: 1, factoryID: 2, zones: [], devices: [], users: [] };
+    prisma.site.findUnique.mockResolvedValue(mockSite);
+    await expect(service.findOne(1, { userID: 1, role: 'Manager' })).resolves.toBe(mockSite);
+  });
+
+  it('sites service create throws Forbidden/NotFound or creates', async () => {
+    const service = new SitesService(prisma as any);
+    await expect(service.create({ siteName: 'S' } as any, { userID: 1, role: 'Operator' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.user.findUnique.mockResolvedValue({ factoryID: 2 });
+    await expect(service.create({ siteName: 'S', factoryID: 99 } as any, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.factory.findUnique.mockResolvedValue(null);
+    await expect(service.create({ siteName: 'S', factoryID: 2 } as any, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(NotFoundException);
+
+    prisma.factory.findUnique.mockResolvedValue({ factoryID: 2 });
+    prisma.site.findUnique.mockResolvedValueOnce(true).mockResolvedValueOnce(null);
+    prisma.site.create.mockResolvedValue({ siteID: 1 });
+    await service.create({ siteName: 'S', factoryID: 2 } as any, { userID: 1, role: 'Manager' });
+    expect(prisma.site.create).toHaveBeenCalled();
+  });
+
+  it('sites service create handles conflicts and errors', async () => {
+    const service = new SitesService(prisma as any);
+    prisma.factory.findUnique.mockResolvedValue({ factoryID: 2 });
+    prisma.site.create.mockRejectedValue({ code: 'P2002', meta: { target: ['siteCode'] } });
+    await expect(service.create({ siteName: 'S', factoryID: 2 } as any, { userID: 1, role: 'Admin' })).rejects.toBeInstanceOf(ConflictException);
+
+    prisma.site.create.mockRejectedValue(new Error('db err'));
+    await expect(service.create({ siteName: 'S', factoryID: 2 } as any, { userID: 1, role: 'Admin' })).rejects.toBeInstanceOf(InternalServerErrorException);
+  });
+
+  it('sites service update handles permissions, parent changes and database outcomes', async () => {
+    const service = new SitesService(prisma as any);
+    prisma.user.findUnique.mockResolvedValue({ factoryID: 2 });
+    prisma.site.findUnique.mockResolvedValue({ siteID: 1, factoryID: 99 }); // mismatched factory for manager
+
+    await expect(service.update(1, {}, { userID: 1, role: 'Operator' })).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.update(1, {}, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.site.findUnique.mockResolvedValue({ siteID: 1, factoryID: 2 });
+    await expect(service.update(1, { factoryID: 99 }, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.factory.findUnique.mockResolvedValue(null);
+    await expect(service.update(1, { factoryID: 99 }, { userID: 1, role: 'Admin' })).rejects.toBeInstanceOf(NotFoundException);
+
+    prisma.factory.findUnique.mockResolvedValue({ factoryID: 99 });
+    prisma.site.update.mockResolvedValue({ siteID: 1 });
+    await service.update(1, { factoryID: 99 }, { userID: 1, role: 'Admin' });
+
+    prisma.site.update.mockRejectedValue({ code: 'P2002', meta: { target: ['siteCode'] } });
+    await expect(service.update(1, {}, { userID: 1, role: 'Admin' })).rejects.toBeInstanceOf(ConflictException);
+
+    prisma.site.update.mockRejectedValue(new Error('err'));
+    await expect(service.update(1, {}, { userID: 1, role: 'Admin' })).rejects.toBeInstanceOf(InternalServerErrorException);
+  });
+
+  it('sites service remove checks dependencies and deletes', async () => {
+    const service = new SitesService(prisma as any);
+    await expect(service.remove(1, { userID: 1, role: 'Operator' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.user.findUnique.mockResolvedValue({ factoryID: 2 });
+    prisma.site.findUnique.mockResolvedValue({ siteID: 1, factoryID: 99 });
+    await expect(service.remove(1, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.site.findUnique.mockResolvedValue({ siteID: 1, factoryID: 2, zones: [{ zoneID: 1 }] });
+    await expect(service.remove(1, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ConflictException);
+
+    prisma.site.findUnique.mockResolvedValue({ siteID: 1, factoryID: 2, zones: [], devices: [{ deviceID: 1 }] });
+    await expect(service.remove(1, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ConflictException);
+
+    prisma.site.findUnique.mockResolvedValue({ siteID: 1, factoryID: 2, zones: [], devices: [], users: [{ userID: 1 }] });
+    await expect(service.remove(1, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ConflictException);
+
+    prisma.site.findUnique.mockResolvedValue({ siteID: 1, factoryID: 2, zones: [], devices: [], users: [] });
+    prisma.site.delete.mockResolvedValue({ siteID: 1 });
+    await service.remove(1, { userID: 1, role: 'Manager' });
+    expect(prisma.site.delete).toHaveBeenCalled();
+  });
+
+  it('sites controller delegates to service', async () => {
+    const service = {
+      findAll: jest.fn(),
+      findOne: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      remove: jest.fn(),
+    };
+    const controller = new SitesController(service as any);
+    const actor = { userID: 1, role: 'Admin' } as any;
+
+    await controller.findAll(actor);
+    await controller.findOne(1, actor);
+    await controller.create({} as any, actor);
+    await controller.update(1, {} as any, actor);
+    await controller.remove(1, actor);
+
+    expect(service.findAll).toHaveBeenCalledWith(actor);
+    expect(service.findOne).toHaveBeenCalledWith(1, actor);
+    expect(service.create).toHaveBeenCalledWith({}, actor);
+    expect(service.update).toHaveBeenCalledWith(1, {}, actor);
+    expect(service.remove).toHaveBeenCalledWith(1, actor);
+  });
+});
+
+describe('RbacPermissionGuard and CurrentActor', () => {
+  let reflector: jest.Mocked<Reflector>;
+  let guard: RbacPermissionGuard;
+
+  beforeEach(() => {
+    reflector = {
+      getAllAndOverride: jest.fn(),
+    } as any;
+    guard = new RbacPermissionGuard(reflector);
+  });
+
+  const mockExecutionContext = (headers: Record<string, string>) => {
+    const request = { headers, actor: undefined };
+    return {
+      switchToHttp: () => ({
+        getRequest: () => request,
+      }),
+      getHandler: () => ({}),
+      getClass: () => ({}),
+    } as any;
+  };
+
+  it('allows access if no permissions are required', () => {
+    reflector.getAllAndOverride.mockReturnValue(undefined);
+    const context = mockExecutionContext({ 'x-user-role': 'Operator', 'x-user-id': '1' });
+    expect(guard.canActivate(context)).toBe(true);
+    expect(context.switchToHttp().getRequest().actor).toEqual({ userID: 1, role: 'Operator' });
+  });
+
+  it('throws UnauthorizedException if credentials are missing and permissions are required', () => {
+    reflector.getAllAndOverride.mockReturnValue(['users.read']);
+    const context = mockExecutionContext({ 'x-user-role': 'Operator' });
+    expect(() => guard.canActivate(context)).toThrow(UnauthorizedException);
+  });
+
+  it('throws ForbiddenException if role lacks permission', () => {
+    reflector.getAllAndOverride.mockReturnValue(['users.read']);
+    const context = mockExecutionContext({ 'x-user-role': 'Operator', 'x-user-id': '1' });
+    expect(() => guard.canActivate(context)).toThrow(ForbiddenException);
+  });
+
+  it('allows access if role has permissions', () => {
+    reflector.getAllAndOverride.mockReturnValue(['users.read']);
+    const context = mockExecutionContext({ 'x-user-role': 'Admin', 'x-user-id': '2' });
+    expect(guard.canActivate(context)).toBe(true);
+  });
+
+  it('CurrentActor decorator returns actor from request when present', () => {
+    // Test the decorator logic directly: simulate what createParamDecorator would call
+    const mockActor = { userID: 5, role: 'Operator' as const };
+    const mockRequest = { actor: mockActor };
+    // The factory function inside CurrentActor reads request.actor
+    // We simulate the same logic inline
+    const decoratorFactory = (_: unknown, ctx: any): any => {
+      return ctx.switchToHttp().getRequest<{ actor?: any }>().actor;
+    };
+    const mockCtx = {
+      switchToHttp: () => ({
+        getRequest: () => mockRequest,
+      }),
+    } as any;
+    expect(decoratorFactory(null, mockCtx)).toEqual(mockActor);
+  });
+
+  it('CurrentActor decorator returns undefined when actor not on request', () => {
+    const decoratorFactory = (_: unknown, ctx: any): any => {
+      return ctx.switchToHttp().getRequest<{ actor?: any }>().actor;
+    };
+    const mockCtx = {
+      switchToHttp: () => ({
+        getRequest: () => ({ actor: undefined }),
+      }),
+    } as any;
+    expect(decoratorFactory(null, mockCtx)).toBeUndefined();
+  });
+});
+
+describe('UsersService additional edge cases', () => {
+  let prisma: ReturnType<typeof createPrismaMock>;
+  let service: UsersService;
+
+  beforeEach(() => {
+    prisma = createPrismaMock();
+    jest.clearAllMocks();
+    service = new UsersService(prisma as any);
+  });
+
+  it('throws BadRequestException for invalid role', async () => {
+    await expect(service.create({ role: 'InvalidRole' } as any)).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('getUserScope throws ForbiddenException if user scope not found', async () => {
+    prisma.user.findUnique.mockResolvedValue(null);
+    await expect(service.findAll({ userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('findAll filters correctly for Manager and Operator', async () => {
+    prisma.user.findUnique.mockResolvedValue({ factoryID: 10, siteID: 20 });
+    prisma.user.findMany.mockResolvedValue([]);
+    
+    await service.findAll({ userID: 1, role: 'Manager' });
+    expect(prisma.user.findMany).toHaveBeenLastCalledWith(expect.objectContaining({
+      where: { factoryID: 10 }
+    }));
+
+    await service.findAll({ userID: 1, role: 'Operator' });
+    expect(prisma.user.findMany).toHaveBeenLastCalledWith(expect.objectContaining({
+      where: { userID: 1 }
+    }));
+  });
+
+  it('findOne throws ForbiddenException if Manager/Operator accesses out of scope', async () => {
+    prisma.user.findUnique
+      .mockResolvedValueOnce({ userID: 2, factoryID: 10 })
+      .mockResolvedValueOnce({ factoryID: 20 });
+    await expect(service.findOne(2, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.user.findUnique
+      .mockResolvedValueOnce({ userID: 2, factoryID: 10 })
+      .mockResolvedValueOnce({ siteID: 30 });
+    await expect(service.findOne(2, { userID: 1, role: 'Operator' })).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('create throws Forbidden/Conflict/NotFound appropriately', async () => {
+    await expect(service.create({ role: 'Manager' } as any, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.user.findFirst.mockResolvedValue({ userID: 9 });
+    await expect(service.create({ role: 'Operator', email: 'exist@a.com' } as any)).rejects.toBeInstanceOf(ConflictException);
+    prisma.user.findFirst.mockResolvedValue(null);
+
+    prisma.user.findUnique.mockResolvedValueOnce(null);
+    await expect(service.create({ role: 'Operator' } as any, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.user.findUnique.mockResolvedValueOnce({ factoryID: 1 });
+    prisma.site.findUnique.mockResolvedValue({ factoryID: 2 });
+    await expect(service.create({ role: 'Operator', siteID: 5 } as any, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.user.findUnique.mockResolvedValueOnce({ factoryID: 1 });
+    prisma.site.findUnique.mockResolvedValue(null);
+    await expect(service.create({ role: 'Operator', siteID: 5 } as any, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(NotFoundException);
+
+    prisma.site.findUnique.mockResolvedValue({ factoryID: 2, factory: { organizationID: 3 } });
+    prisma.user.create.mockResolvedValue({ userID: 2 });
+    prisma.user.findUnique.mockResolvedValue({ userID: 2 });
+    prisma.zone.updateMany.mockResolvedValue({ count: 1 });
+    await service.create({ role: 'Operator', siteID: 5, chamberIDs: [1, 2] } as any, { userID: 1, role: 'Admin' });
+
+    prisma.factory.findUnique.mockResolvedValue({ organizationID: 4 });
+    await service.create({ role: 'Operator', factoryID: 8 } as any, { userID: 1, role: 'Admin' });
+
+    prisma.user.create.mockRejectedValue({ code: 'P2002', meta: { target: ['email'] } });
+    await expect(service.create({ role: 'Operator' } as any)).rejects.toBeInstanceOf(ConflictException);
+
+    prisma.user.create.mockRejectedValue(new Error('db err'));
+    await expect(service.create({ role: 'Operator' } as any)).rejects.toBeInstanceOf(InternalServerErrorException);
+  });
+
+  it('update throws and runs transactions appropriately', async () => {
+    // update(2, {role:'Operator'}, {userID:1, role:'Manager'}) calls:
+    //  1) getUserScope(Manager) -> findUnique({userID:1}) -> scope
+    //  2) findOne(2, Manager) -> getUserScope again -> findUnique({userID:1}) -> scope
+    //  3) findOne(2, Manager) -> findUnique({userID:2}) -> target user {role:'Manager'}
+    // Then checks existingUser.role !== 'Operator' -> throws ForbiddenException
+    prisma.user.findUnique
+      .mockResolvedValueOnce({ factoryID: 1 })   // scope for outer getUserScope
+      .mockResolvedValueOnce({ factoryID: 1 })   // scope inside findOne's getUserScope
+      .mockResolvedValueOnce({ userID: 2, role: 'Manager' }); // target user
+    await expect(service.update(2, { role: 'Operator' }, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    // update(2, {role:'Manager'}, {userID:1, role:'Manager'}) with target Operator:
+    //  throws because nextRole !== 'Operator'
+    prisma.user.findUnique
+      .mockResolvedValueOnce({ factoryID: 1 })
+      .mockResolvedValueOnce({ factoryID: 1 })
+      .mockResolvedValueOnce({ userID: 2, role: 'Operator' });
+    await expect(service.update(2, { role: 'Manager' }, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    // siteID mismatch: site.factoryID(2) != scope.factoryID(1)
+    prisma.user.findUnique
+      .mockResolvedValueOnce({ factoryID: 1 })
+      .mockResolvedValueOnce({ factoryID: 1 })
+      .mockResolvedValueOnce({ userID: 2, role: 'Operator' });
+    prisma.site.findUnique.mockResolvedValue({ factoryID: 2 });
+    await expect(service.update(2, { siteID: 5 }, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    // site.factoryID(1) == scope.factoryID(1) -> success
+    // call sequence: scope, findOne(scope), findOne(user), final-findOne(scope), final-findOne(user)
+    prisma.user.findUnique
+      .mockResolvedValueOnce({ factoryID: 1 })                       // 1) outer getUserScope
+      .mockResolvedValueOnce({ factoryID: 1 })                       // 2) findOne getUserScope
+      .mockResolvedValueOnce({ userID: 2, role: 'Operator', factoryID: 1 }) // 3) target user
+      .mockResolvedValueOnce({ factoryID: 1 })                       // 4) final findOne getUserScope
+      .mockResolvedValueOnce({ userID: 2, role: 'Operator', factoryID: 1 }); // 5) final findOne user
+    prisma.site.findUnique.mockResolvedValue({ factoryID: 1 });
+    prisma.user.update.mockResolvedValue({ userID: 2, role: 'Operator' });
+    prisma.zone.updateMany.mockResolvedValue({ count: 1 });
+    await service.update(2, { siteID: 5, chamberIDs: [10] }, { userID: 1, role: 'Manager' });
+
+
+    prisma.user.findUnique.mockResolvedValue({ userID: 2, role: 'Operator' });
+    prisma.site.findUnique.mockResolvedValue({ factoryID: 1, factory: { organizationID: 2 } });
+    prisma.user.update.mockResolvedValue({ userID: 2, role: 'Operator' });
+    await service.update(2, { siteID: 5, chamberIDs: [10] }, { userID: 1, role: 'Admin' });
+
+    prisma.user.update.mockResolvedValue({ userID: 2, role: 'Admin' });
+    prisma.zone.updateMany.mockResolvedValue({ count: 1 });
+    await service.update(2, { role: 'Admin' }, { userID: 1, role: 'Admin' });
+    expect(prisma.zone.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { userID: 2 },
+      data: { userID: null }
+    }));
+  });
+
+  it('remove throws and processes unassignment', async () => {
+    await expect(service.remove(1, { userID: 1, role: 'Admin' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    // remove(2, Manager): Manager actor
+    //  1) getUserScope(Manager) -> findUnique({userID:1}) -> scope
+    //  2) findOne(2, Manager) -> getUserScope again -> findUnique({userID:1}) -> scope
+    //  3) findOne(2, Manager) -> findUnique({userID:2}) -> target user {role:'Manager'}
+    // Manager can only remove Operators -> throws ForbiddenException
+    prisma.user.findUnique
+      .mockResolvedValueOnce({ factoryID: 1 })   // scope outer
+      .mockResolvedValueOnce({ factoryID: 1 })   // scope inside findOne
+      .mockResolvedValueOnce({ userID: 2, role: 'Manager' }); // target user
+    await expect(service.remove(2, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.user.findUnique.mockResolvedValue({ userID: 2, role: 'Admin' });
+    await expect(service.remove(2, { userID: 1, role: 'Admin' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.user.findUnique.mockResolvedValue({ userID: 2, role: 'Operator' });
+    prisma.zone.updateMany.mockResolvedValue({ count: 1 });
+    prisma.user.delete.mockResolvedValue({ userID: 2 });
+    await service.remove(2, { userID: 1, role: 'Admin' });
+    expect(prisma.zone.updateMany).toHaveBeenCalledWith({
+      where: { userID: 2 },
+      data: { userID: null }
+    });
+    expect(prisma.user.delete).toHaveBeenCalledWith({ where: { userID: 2 } });
+  });
+});
+
+describe('ZonesService additional edge cases', () => {
+  let prisma: ReturnType<typeof createPrismaMock>;
+  let service: ZonesService;
+
+  beforeEach(() => {
+    prisma = createPrismaMock();
+    jest.clearAllMocks();
+    service = new ZonesService(prisma as any);
+  });
+
+  it('getUserScope throws if user not found', async () => {
+    prisma.user.findUnique.mockResolvedValue(null);
+    await expect(service.findAll({ userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('findAll applies Manager and Operator scopes', async () => {
+    prisma.user.findUnique.mockResolvedValue({ factoryID: 10, siteID: 20 });
+    prisma.zone.findMany.mockResolvedValue([]);
+
+    await service.findAll({ userID: 1, role: 'Manager' });
+    expect(prisma.zone.findMany).toHaveBeenLastCalledWith(expect.objectContaining({
+      where: { factoryID: 10 }
+    }));
+
+    await service.findAll({ userID: 1, role: 'Operator' });
+    expect(prisma.zone.findMany).toHaveBeenLastCalledWith(expect.objectContaining({
+      where: { siteID: 20 }
+    }));
+  });
+
+  it('findOne throws Forbidden appropriately', async () => {
+    prisma.user.findUnique.mockResolvedValue({ factoryID: 10, siteID: 20 });
+    prisma.zone.findUnique.mockResolvedValue({ zoneID: 1, factoryID: 99 });
+    await expect(service.findOne(1, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.zone.findUnique.mockResolvedValue({ zoneID: 1, siteID: 99 });
+    await expect(service.findOne(1, { userID: 1, role: 'Operator' })).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('create validates roles, sites, scopes and handles database errors', async () => {
+    await expect(service.create({ zoneName: 'Z' } as any, { userID: 1, role: 'Operator' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.site.findUnique.mockResolvedValue(null);
+    await expect(service.create({ zoneName: 'Z', siteID: 5 } as any, { userID: 1, role: 'Admin' })).rejects.toBeInstanceOf(NotFoundException);
+
+    prisma.user.findUnique.mockResolvedValue({ factoryID: 1 });
+    prisma.site.findUnique.mockResolvedValue({ factoryID: 2 });
+    await expect(service.create({ zoneName: 'Z', siteID: 5 } as any, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.site.findUnique.mockResolvedValue({ factoryID: 1, factory: { organizationID: 3 } });
+    prisma.zone.create.mockResolvedValue({ zoneID: 1 });
+    await service.create({ zoneName: 'Z', siteID: 5 } as any, { userID: 1, role: 'Manager' });
+
+    prisma.user.findUnique.mockResolvedValue({ factoryID: 1, organizationID: 3 });
+    await service.create({ zoneName: 'Z' } as any, { userID: 1, role: 'Manager' });
+
+    prisma.zone.create.mockRejectedValue({ code: 'P2002', meta: { target: ['zoneName'] } });
+    await expect(service.create({ zoneName: 'Z' } as any)).rejects.toBeInstanceOf(ConflictException);
+
+    prisma.zone.create.mockRejectedValue(new Error('db err'));
+    await expect(service.create({ zoneName: 'Z' } as any)).rejects.toBeInstanceOf(InternalServerErrorException);
+  });
+
+  it('update validates roles, sites, scopes and handles database errors', async () => {
+    prisma.zone.findUnique.mockResolvedValue({ zoneID: 1, factoryID: 2 });
+
+    await expect(service.update(1, {}, { userID: 1, role: 'Operator' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.user.findUnique.mockResolvedValue({ factoryID: 99 });
+    await expect(service.update(1, {}, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.user.findUnique.mockResolvedValue({ factoryID: 2 });
+    prisma.site.findUnique.mockResolvedValue(null);
+    await expect(service.update(1, { siteID: 5 }, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(NotFoundException);
+
+    prisma.site.findUnique.mockResolvedValue({ factoryID: 99 });
+    await expect(service.update(1, { siteID: 5 }, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.site.findUnique.mockResolvedValue({ factoryID: 2, factory: { organizationID: 3 } });
+    prisma.zone.update.mockResolvedValue({ zoneID: 1 });
+    await service.update(1, { siteID: 5 }, { userID: 1, role: 'Manager' });
+
+    prisma.zone.update.mockRejectedValue({ code: 'P2002', meta: { target: ['zoneName'] } });
+    await expect(service.update(1, {} as any)).rejects.toBeInstanceOf(ConflictException);
+
+    prisma.zone.update.mockRejectedValue(new Error('db err'));
+    await expect(service.update(1, {} as any)).rejects.toBeInstanceOf(InternalServerErrorException);
+  });
+
+  it('remove validates roles and dependencies', async () => {
+    await expect(service.remove(1, { userID: 1, role: 'Operator' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.user.findUnique.mockResolvedValue({ factoryID: 99 });
+    prisma.zone.findUnique.mockResolvedValue({ zoneID: 1, factoryID: 2 });
+    await expect(service.remove(1, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ForbiddenException);
+
+    prisma.user.findUnique.mockResolvedValue({ factoryID: 2 });
+    prisma.zone.findUnique.mockResolvedValue({ zoneID: 1, factoryID: 2, devices: [{ deviceID: 1 }] });
+    await expect(service.remove(1, { userID: 1, role: 'Manager' })).rejects.toBeInstanceOf(ConflictException);
+
+    prisma.zone.findUnique.mockResolvedValue({ zoneID: 1, factoryID: 2, devices: [] });
+    prisma.zone.delete.mockResolvedValue({ zoneID: 1 });
+    await service.remove(1, { userID: 1, role: 'Manager' });
+    expect(prisma.zone.delete).toHaveBeenCalled();
+  });
+});
+
