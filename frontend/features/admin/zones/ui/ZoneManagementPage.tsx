@@ -27,31 +27,35 @@ import {
   DeleteOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
-import { zonesApi, ApiZone, chambersApi, ApiChamber } from '@/shared/lib/api';
+import { zonesApi, ApiZone, chambersApi, ApiChamber, sitesApi, ApiSite } from '@/shared/lib/api';
 
 const { Title, Text } = Typography;
 
 export default function ZoneManagementPage() {
   const { message } = App.useApp();
-  const [form] = Form.useForm<{ zoneName: string; zoneDescription?: string }>();
+  const [form] = Form.useForm<{ zoneName: string; zoneDescription?: string; siteID?: number }>();
   const [zones, setZones] = useState<ApiZone[]>([]);
   const [chambers, setChambers] = useState<ApiChamber[]>([]);
+  const [sites, setSites] = useState<ApiSite[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingZone, setEditingZone] = useState<ApiZone | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [occupancyFilter, setOccupancyFilter] = useState<'all' | 'has-chamber' | 'empty'>('all');
+  const [siteFilter, setSiteFilter] = useState<number | 'all'>('all');
 
   const loadData = async () => {
     setLoading(true);
     try {
-      const [zoneRows, chamberRows] = await Promise.all([
+      const [zoneRows, chamberRows, siteRows] = await Promise.all([
         zonesApi.getAll(),
         chambersApi.getAll(),
+        sitesApi.getAll(),
       ]);
       setZones(zoneRows);
       setChambers(chamberRows);
+      setSites(siteRows);
     } catch {
       message.error('Không thể tải danh sách zone.');
     } finally {
@@ -90,22 +94,24 @@ export default function ZoneManagementPage() {
       const hasChamber = (chamberMapByZone.get(zone.zoneID)?.length ?? 0) > 0;
       if (occupancyFilter === 'has-chamber' && !hasChamber) return false;
       if (occupancyFilter === 'empty' && hasChamber) return false;
+      if (siteFilter !== 'all' && zone.siteID !== siteFilter) return false;
 
       if (!q) return true;
       const name = String(zone.zoneName ?? '').toLowerCase();
       const description = String(zone.zoneDescription ?? '').toLowerCase();
       return name.includes(q) || description.includes(q);
     });
-  }, [chamberMapByZone, occupancyFilter, searchQuery, zones]);
+  }, [chamberMapByZone, occupancyFilter, siteFilter, searchQuery, zones]);
 
   const resetFilters = () => {
     setSearchQuery('');
     setOccupancyFilter('all');
+    setSiteFilter('all');
   };
 
   const openCreate = () => {
     setEditingZone(null);
-    form.setFieldsValue({ zoneName: '', zoneDescription: '' });
+    form.setFieldsValue({ zoneName: '', zoneDescription: '', siteID: undefined });
     setModalOpen(true);
   };
 
@@ -114,6 +120,7 @@ export default function ZoneManagementPage() {
     form.setFieldsValue({
       zoneName: zone.zoneName ?? '',
       zoneDescription: zone.zoneDescription ?? '',
+      siteID: zone.siteID ?? undefined,
     });
     setModalOpen(true);
   };
@@ -126,6 +133,7 @@ export default function ZoneManagementPage() {
       const payload = {
         zoneName: String(values.zoneName ?? '').trim(),
         zoneDescription: String(values.zoneDescription ?? '').trim() || undefined,
+        siteID: values.siteID ? Number(values.siteID) : undefined!,
       };
 
       if (editingZone) {
@@ -163,6 +171,12 @@ export default function ZoneManagementPage() {
       render: (v: string | null) => <Text strong>{v ?? '—'}</Text>,
       width: 180,
     },
+    {
+      title: 'Phân xưởng trực thuộc',
+      key: 'site',
+      render: (_: unknown, r: ApiZone) => r.site?.siteName ?? '—',
+      width: 180,
+    },
     { title: 'Mô tả', dataIndex: 'zoneDescription' },
     {
       title: 'Buồng sấy trong Zone',
@@ -181,6 +195,7 @@ export default function ZoneManagementPage() {
           </Space>
         );
       },
+      width: 250,
     },
     {
       title: 'Thao tác',
@@ -213,10 +228,11 @@ export default function ZoneManagementPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
         <div>
           <Title level={3} style={{ margin: 0 }}>
+
             <GlobalOutlined style={{ marginRight: 8, color: '#1677ff' }} />
             Quản lý Zone
           </Title>
-          <Text type="secondary">Mỗi Zone gồm nhiều Buồng sấy (A/B/C...).</Text>
+          <Text type="secondary">Mỗi Zone gồm nhiều Buồng sấy (A/B/C...) phân theo phân xưởng.</Text>
         </div>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={() => void loadData()}>
@@ -260,14 +276,24 @@ export default function ZoneManagementPage() {
               onChange={(event) => setSearchQuery(event.target.value)}
               placeholder="Tìm tên/mô tả zone..."
               allowClear
-              style={{ width: 300 }}
+              style={{ width: 250 }}
+            />
+            <Select
+              value={siteFilter}
+              onChange={(value) => setSiteFilter(value)}
+              style={{ width: 200 }}
+              placeholder="Lọc theo phân xưởng"
+              options={[
+                { value: 'all', label: 'Tất cả phân xưởng' },
+                ...sites.map((s) => ({ value: s.siteID, label: s.siteName ?? `Site ${s.siteID}` })),
+              ]}
             />
             <Select
               value={occupancyFilter}
               onChange={(value) => setOccupancyFilter(value)}
-              style={{ width: 220 }}
+              style={{ width: 180 }}
               options={[
-                { value: 'all', label: 'Tất cả zone' },
+                { value: 'all', label: 'Tất cả trạng thái buồng' },
                 { value: 'has-chamber', label: 'Zone có buồng sấy' },
                 { value: 'empty', label: 'Zone chưa có buồng' },
               ]}
@@ -292,6 +318,7 @@ export default function ZoneManagementPage() {
         onOk={() => void saveZone()}
         confirmLoading={saving}
         okText={editingZone ? 'Lưu thay đổi' : 'Tạo Zone'}
+        cancelText="Hủy"
       >
         <Form form={form} layout="vertical">
           <Form.Item
@@ -300,6 +327,20 @@ export default function ZoneManagementPage() {
             rules={[{ required: true, message: 'Vui lòng nhập tên zone.' }]}
           >
             <Input placeholder="Ví dụ: Zone A" />
+          </Form.Item>
+          <Form.Item
+            name="siteID"
+            label="Phân xưởng trực thuộc"
+            rules={[{ required: true, message: 'Vui lòng chọn phân xưởng trực thuộc.' }]}
+          >
+            <Select
+              placeholder="Chọn phân xưởng"
+              allowClear
+              options={sites.map((site) => ({
+                value: site.siteID,
+                label: site.siteName ?? `Site ${site.siteID}`,
+              }))}
+            />
           </Form.Item>
           <Form.Item name="zoneDescription" label="Mô tả">
             <Input.TextArea rows={3} placeholder="Zone A gồm các buồng sấy A/B/C" />

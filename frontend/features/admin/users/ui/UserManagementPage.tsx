@@ -12,9 +12,16 @@ import {
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, UserOutlined,
   MailOutlined, LockOutlined, CheckCircleOutlined, StopOutlined,
+  BankOutlined, BuildOutlined, EnvironmentOutlined
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import { usersApi, ApiUser, zonesApi, ApiZone } from '@/shared/lib/api';
+import {
+  usersApi, ApiUser, zonesApi, ApiZone,
+  organizationsApi, ApiOrganization,
+  factoriesApi, ApiFactory,
+  sitesApi, ApiSite,
+} from '@/shared/lib/api';
+import { getAuthSessionFromStorage, AuthSession } from '@/shared/auth/session';
 
 const { Title, Text } = Typography;
 
@@ -35,24 +42,43 @@ export default function UserManagementPage() {
   const { message, modal } = App.useApp();
   const [users, setUsers] = useState<ApiUser[]>([]);
   const [zones, setZones] = useState<ApiZone[]>([]);
+  const [organizations, setOrganizations] = useState<ApiOrganization[]>([]);
+  const [factories, setFactories] = useState<ApiFactory[]>([]);
+  const [sites, setSites] = useState<ApiSite[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<ApiUser | null>(null);
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
+  
+  const [currentUserScope, setCurrentUserScope] = useState<AuthSession | null>(null);
+
   const selectedRole = Form.useWatch('role', form) as UserRole | undefined;
+  const watchedOrgID = Form.useWatch('organizationID', form) as number | undefined;
+  const watchedFactoryID = Form.useWatch('factoryID', form) as number | undefined;
+  const watchedSiteID = Form.useWatch('siteID', form) as number | undefined;
+
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState<'all' | UserRole>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'Active' | 'Inactive'>('all');
 
   const loadUsers = async () => {
     try {
-      const [data, zoneRows] = await Promise.all([
+      const session = getAuthSessionFromStorage();
+      setCurrentUserScope(session);
+
+      const [userData, zoneRows, orgRows, facRows, siteRows] = await Promise.all([
         usersApi.getAll(),
         zonesApi.getAll(),
+        organizationsApi.getAll().catch(() => []),
+        factoriesApi.getAll().catch(() => []),
+        sitesApi.getAll().catch(() => []),
       ]);
-      setUsers(data);
+      setUsers(userData);
       setZones(zoneRows);
+      setOrganizations(orgRows);
+      setFactories(facRows);
+      setSites(siteRows);
     } catch {
       message.error('Không thể tải danh sách người dùng.');
     } finally {
@@ -61,6 +87,8 @@ export default function UserManagementPage() {
   };
 
   useEffect(() => { loadUsers(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const isManager = currentUserScope?.role === 'Manager';
 
   const filtered = users.filter(u => {
     const name = displayName(u).toLowerCase();
@@ -82,6 +110,13 @@ export default function UserManagementPage() {
   const openCreate = () => {
     setEditingUser(null);
     form.resetFields();
+    if (isManager) {
+      form.setFieldsValue({
+        role: 'Operator',
+        organizationID: currentUserScope?.organizationID,
+        factoryID: currentUserScope?.factoryID,
+      });
+    }
     setModalOpen(true);
   };
 
@@ -92,6 +127,9 @@ export default function UserManagementPage() {
       lastName: user.lastName,
       email: user.email,
       role: user.role,
+      organizationID: user.organizationID || undefined,
+      factoryID: user.factoryID || undefined,
+      siteID: user.siteID || undefined,
       zoneIDs: user.zones?.map((z) => z.zoneID) ?? [],
     });
     setModalOpen(true);
@@ -102,8 +140,14 @@ export default function UserManagementPage() {
       const values = await form.validateFields();
       setSaving(true);
       const payload = {
-        ...values,
-        // Backend đang dùng field chamberIDs cho danh sách zone gán operator.
+        firstName: values.firstName,
+        lastName: values.lastName,
+        email: values.email,
+        password: values.password,
+        role: values.role,
+        organizationID: values.organizationID || null,
+        factoryID: values.role === 'Admin' ? null : (values.factoryID || null),
+        siteID: (values.role === 'Admin' || values.role === 'Manager') ? null : (values.siteID || null),
         chamberIDs:
           values.role === 'Operator'
             ? (Array.isArray(values.zoneIDs) ? values.zoneIDs : [])
@@ -208,6 +252,42 @@ export default function UserManagementPage() {
       },
     },
     {
+      title: 'Tổ chức / Nhà máy',
+      key: 'org_factory',
+      render: (_, r) => (
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <BankOutlined style={{ color: '#8c8c8c', fontSize: 12 }} />
+            <Text style={{ fontSize: 13 }}>
+              {r.organization?.organizationName || '—'}
+            </Text>
+          </div>
+          {r.role !== 'Admin' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
+              <BuildOutlined style={{ color: '#8c8c8c', fontSize: 12 }} />
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                {r.factory?.factoryName || '—'}
+              </Text>
+            </div>
+          )}
+        </div>
+      ),
+    },
+    {
+      title: 'Phân xưởng',
+      key: 'site',
+      render: (_, r) => (
+        r.role === 'Operator' && r.site ? (
+          <Space size={4}>
+            <EnvironmentOutlined style={{ color: '#8c8c8c', fontSize: 12 }} />
+            <Text style={{ fontSize: 13 }}>{r.site.siteName}</Text>
+          </Space>
+        ) : (
+          <Text type="secondary">—</Text>
+        )
+      ),
+    },
+    {
       title: 'Zone phụ trách',
       key: 'zones',
       render: (_, r) => {
@@ -244,23 +324,33 @@ export default function UserManagementPage() {
       title: 'Thao tác',
       key: 'action',
       width: 110,
-      render: (_, record) => (
-        <Space>
-          <Tooltip title="Chỉnh sửa">
-            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} style={{ borderRadius: 7 }} />
-          </Tooltip>
-          <Tooltip title="Xóa tài khoản">
-            <Button
-              size="small"
-              danger
-              icon={<DeleteOutlined />}
-              onClick={() => handleDelete(record)}
-              style={{ borderRadius: 7 }}
-              disabled={record.role === 'Admin'}
-            />
-          </Tooltip>
-        </Space>
-      ),
+      render: (_, record) => {
+        const isSelf = record.userID === currentUserScope?.userID;
+        const disableEdit = isManager && record.role !== 'Operator';
+        return (
+          <Space>
+            <Tooltip title="Chỉnh sửa">
+              <Button 
+                size="small" 
+                icon={<EditOutlined />} 
+                onClick={() => openEdit(record)} 
+                style={{ borderRadius: 7 }} 
+                disabled={disableEdit}
+              />
+            </Tooltip>
+            <Tooltip title="Xóa tài khoản">
+              <Button
+                size="small"
+                danger
+                icon={<DeleteOutlined />}
+                onClick={() => handleDelete(record)}
+                style={{ borderRadius: 7 }}
+                disabled={record.role === 'Admin' || isSelf || disableEdit}
+              />
+            </Tooltip>
+          </Space>
+        );
+      },
     },
   ];
 
@@ -306,9 +396,16 @@ export default function UserManagementPage() {
             ]}
           />
           <Button onClick={clearFilters}>Xóa lọc</Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate} style={{ borderRadius: 8 }}>
-            Thêm người dùng
-          </Button>
+          {!isManager && (
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate} style={{ borderRadius: 8 }}>
+              Thêm người dùng
+            </Button>
+          )}
+          {isManager && (
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate} style={{ borderRadius: 8 }}>
+              Thêm Operator
+            </Button>
+          )}
         </Space>
       </div>
 
@@ -416,9 +513,68 @@ export default function UserManagementPage() {
             <Select
               placeholder="Chọn vai trò..."
               options={ROLES.map(r => ({ value: r, label: r }))}
+              disabled={isManager || (editingUser ? true : false)}
             />
           </Form.Item>
-          {selectedRole === 'Operator' ? (
+
+          {/* Organization Selector */}
+          {selectedRole && (
+            <Form.Item
+              name="organizationID"
+              label="Tổ chức"
+              rules={[{ required: true, message: 'Vui lòng chọn tổ chức!' }]}
+            >
+              <Select
+                placeholder="Chọn tổ chức..."
+                options={organizations.map(o => ({ value: o.organizationID, label: o.organizationName }))}
+                disabled={isManager}
+              />
+            </Form.Item>
+          )}
+
+          {/* Factory Selector */}
+          {selectedRole && selectedRole !== 'Admin' && (
+            <Form.Item
+              name="factoryID"
+              label="Nhà máy"
+              rules={[{ required: true, message: 'Vui lòng chọn nhà máy!' }]}
+            >
+              <Select
+                placeholder="Chọn nhà máy..."
+                options={
+                  factories
+                    .filter(f => !watchedOrgID || f.organizationID === watchedOrgID)
+                    .map(f => ({ value: f.factoryID, label: f.factoryName }))
+                }
+                disabled={isManager}
+              />
+            </Form.Item>
+          )}
+
+          {/* Site Selector */}
+          {selectedRole === 'Operator' && (
+            <Form.Item
+              name="siteID"
+              label="Phân xưởng"
+              rules={[{ required: false }]}
+            >
+              <Select
+                placeholder="Chọn phân xưởng (tùy chọn)..."
+                allowClear
+                options={
+                  sites
+                    .filter(s => {
+                      if (isManager) return s.factoryID === currentUserScope?.factoryID;
+                      return !watchedFactoryID || s.factoryID === watchedFactoryID;
+                    })
+                    .map(s => ({ value: s.siteID, label: s.siteName }))
+                }
+              />
+            </Form.Item>
+          )}
+
+          {/* Zones Selector */}
+          {selectedRole === 'Operator' && (
             <Form.Item
               name="zoneIDs"
               label="Zone phụ trách"
@@ -427,13 +583,21 @@ export default function UserManagementPage() {
               <Select
                 mode="multiple"
                 placeholder="Chọn zone cho Operator"
-                options={zones.map((zone) => ({
-                  value: zone.zoneID,
-                  label: zone.zoneName || `Zone ${zone.zoneID}`,
-                }))}
+                options={
+                  zones
+                    .filter(z => {
+                      if (watchedSiteID) return z.siteID === watchedSiteID;
+                      if (isManager) return z.factoryID === currentUserScope?.factoryID;
+                      return !watchedFactoryID || z.factoryID === watchedFactoryID;
+                    })
+                    .map((zone) => ({
+                      value: zone.zoneID,
+                      label: zone.zoneName || `Zone ${zone.zoneID}`,
+                    }))
+                }
               />
             </Form.Item>
-          ) : null}
+          )}
         </Form>
       </Modal>
     </div>

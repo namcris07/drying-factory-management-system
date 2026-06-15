@@ -151,25 +151,34 @@ describe('AnalyticsController', () => {
       'temperature',
     );
 
-    expect(service.getSummary).toHaveBeenCalledWith({
-      from: '2026-01-01',
-      to: '2026-01-31',
-      zoneId: 2,
-    });
-    expect(service.getTrend).toHaveBeenCalledWith({
-      from: '2026-01-01',
-      to: '2026-01-31',
-      zoneId: 3,
-      period: 'month',
-      status: 'all',
-      page: 2,
-      pageSize: 20,
-    });
-    expect(service.getHourlyAvg).toHaveBeenCalledWith({
-      from: '2026-01-01',
-      to: '2026-01-31',
-      zoneId: 4,
-      metric: 'temperature',
-    });
+    expect(service.getSummary).toHaveBeenCalledWith(
+      {
+        from: '2026-01-01',
+        to: '2026-01-31',
+        zoneId: 2,
+      },
+      undefined,
+    );
+    expect(service.getTrend).toHaveBeenCalledWith(
+      {
+        from: '2026-01-01',
+        to: '2026-01-31',
+        zoneId: 3,
+        period: 'month',
+        status: 'all',
+        page: 2,
+        pageSize: 20,
+      },
+      undefined,
+    );
+    expect(service.getHourlyAvg).toHaveBeenCalledWith(
+      {
+        from: '2026-01-01',
+        to: '2026-01-31',
+        zoneId: 4,
+        metric: 'temperature',
+      },
+      undefined,
+    );
   });
 });

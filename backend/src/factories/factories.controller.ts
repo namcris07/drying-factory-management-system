@@ -8,18 +8,18 @@ import {
   Body,
   ParseIntPipe,
 } from '@nestjs/common';
-import { ZonesService } from './zones.service';
-import { CreateZoneDto } from './dto/create-zone.dto';
+import { FactoriesService } from './factories.service';
+import { CreateFactoryDto } from './dto/create-factory.dto';
 import { CurrentActor } from '../common/rbac/current-actor.decorator';
 import type { ActorContext } from '../common/rbac/permissions';
 
-@Controller('zones')
-export class ZonesController {
-  constructor(private zonesService: ZonesService) {}
+@Controller('factories')
+export class FactoriesController {
+  constructor(private factoriesService: FactoriesService) {}
 
   @Get()
   findAll(@CurrentActor() actor?: ActorContext) {
-    return this.zonesService.findAll(actor);
+    return this.factoriesService.findAll(actor);
   }
 
   @Get(':id')
@@ -27,21 +27,21 @@ export class ZonesController {
     @Param('id', ParseIntPipe) id: number,
     @CurrentActor() actor?: ActorContext,
   ) {
-    return this.zonesService.findOne(id, actor);
+    return this.factoriesService.findOne(id, actor);
   }
 
   @Post()
-  create(@Body() dto: CreateZoneDto, @CurrentActor() actor?: ActorContext) {
-    return this.zonesService.create(dto, actor);
+  create(@Body() dto: CreateFactoryDto, @CurrentActor() actor?: ActorContext) {
+    return this.factoriesService.create(dto, actor);
   }
 
   @Patch(':id')
   update(
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: Partial<CreateZoneDto>,
+    @Body() dto: Partial<CreateFactoryDto>,
     @CurrentActor() actor?: ActorContext,
   ) {
-    return this.zonesService.update(id, dto, actor);
+    return this.factoriesService.update(id, dto, actor);
   }
 
   @Delete(':id')
@@ -49,6 +49,6 @@ export class ZonesController {
     @Param('id', ParseIntPipe) id: number,
     @CurrentActor() actor?: ActorContext,
   ) {
-    return this.zonesService.remove(id, actor);
+    return this.factoriesService.remove(id, actor);
   }
 }

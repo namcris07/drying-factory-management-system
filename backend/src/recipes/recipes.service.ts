@@ -2,14 +2,26 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateRecipeDto } from './dto/create-recipe.dto';
+import type { ActorContext } from '../common/rbac/permissions';
 
 @Injectable()
 export class RecipesService {
   constructor(private prisma: PrismaService) {}
+
+  private async getUserScope(actor?: ActorContext) {
+    if (!actor || actor.role === 'Admin') return null;
+    const user = await this.prisma.user.findUnique({
+      where: { userID: actor.userID },
+      select: { organizationID: true, factoryID: true, siteID: true },
+    });
+    if (!user) throw new ForbiddenException('User scope not found.');
+    return user;
+  }
 
   private buildRecipeWhere(params: {
     includeInactive?: boolean;
@@ -152,8 +164,13 @@ export class RecipesService {
       page?: number;
       pageSize?: number;
     } = {},
+    actor?: ActorContext,
   ) {
+    const scope = await this.getUserScope(actor);
     const where = this.buildRecipeWhere(params);
+    if (scope) {
+      where.factoryID = scope.factoryID ?? -1;
+    }
     const page =
       params.page !== undefined ? Math.max(1, Number(params.page)) : undefined;
     const pageSize =
@@ -199,17 +216,32 @@ export class RecipesService {
     );
   }
 
-  async findOne(id: number) {
+  async findOne(id: number, actor?: ActorContext) {
+    const scope = await this.getUserScope(actor);
     const recipe = await this.prisma.recipe.findUnique({
       where: { recipeID: id },
       include: this.recipeInclude,
     });
     if (!recipe) throw new NotFoundException(`Recipe ${id} not found`);
+
+    if (scope && recipe.factoryID !== scope.factoryID) {
+      throw new ForbiddenException(
+        'Bạn không có quyền truy cập công thức này.',
+      );
+    }
+
     return this.toRecipeResponse(recipe as Record<string, unknown>);
   }
 
-  async create(dto: CreateRecipeDto) {
+  async create(dto: CreateRecipeDto, actor?: ActorContext) {
+    const scope = await this.getUserScope(actor);
     const { steps, stages, ...recipeData } = dto;
+
+    if (scope) {
+      recipeData.organizationID = scope.organizationID ?? undefined;
+      recipeData.factoryID = scope.factoryID ?? undefined;
+      recipeData.userID = actor?.userID;
+    }
 
     const normalizedStages = (stages ?? []).map((stage, i) =>
       this.normalizeStageInput(stage, i),
@@ -278,8 +310,12 @@ export class RecipesService {
     return this.toRecipeResponse(created as Record<string, unknown>);
   }
 
-  async update(id: number, dto: Partial<CreateRecipeDto>) {
-    await this.findOne(id);
+  async update(
+    id: number,
+    dto: Partial<CreateRecipeDto>,
+    actor?: ActorContext,
+  ) {
+    await this.findOne(id, actor);
     const { steps, stages, ...recipeData } = dto;
     const data: Prisma.RecipeUncheckedUpdateInput = {};
 
@@ -321,8 +357,8 @@ export class RecipesService {
     return this.toRecipeResponse(updated as Record<string, unknown>);
   }
 
-  async remove(id: number) {
-    await this.findOne(id);
+  async remove(id: number, actor?: ActorContext) {
+    await this.findOne(id, actor);
 
     const usedByBatchCount = await this.prisma.batch.count({
       where: { recipeID: id },

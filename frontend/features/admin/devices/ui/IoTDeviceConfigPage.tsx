@@ -467,7 +467,7 @@ export default function IoTDeviceConfigPage() {
                           ]} />
                       </Form.Item>
                       <Form.Item name={[field.name, 'feedKey']} rules={[{ required: true, message: 'Nhập feed key.' }]} style={{ width: 180 }}>
-                        <Input placeholder="drytech.m-a1-temp-in" />
+                        <Input placeholder="drytech.m-a1-temp" />
                       </Form.Item>
                       <Form.Item name={[field.name, 'status']} style={{ width: 110 }}>
                         <Select options={[

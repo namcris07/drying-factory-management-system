@@ -6,6 +6,9 @@ export interface AuthSession {
   role: UserRole;
   zone?: string;
   zones?: { zoneID: number; zoneName: string }[];
+  organizationID?: number;
+  factoryID?: number;
+  siteID?: number;
 }
 
 export const SESSION_STORAGE_KEY = 'drytechUser';
@@ -32,6 +35,9 @@ export function parseAuthSession(raw: string | null): AuthSession | null {
       role: parsed.role,
       zone: parsed.zone,
       ...(normalizedZones ? { zones: normalizedZones } : {}),
+      ...(Number.isFinite(parsed.organizationID) ? { organizationID: Number(parsed.organizationID) } : {}),
+      ...(Number.isFinite(parsed.factoryID) ? { factoryID: Number(parsed.factoryID) } : {}),
+      ...(Number.isFinite(parsed.siteID) ? { siteID: Number(parsed.siteID) } : {}),
     };
   } catch {
     return null;

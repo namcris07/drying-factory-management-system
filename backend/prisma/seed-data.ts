@@ -189,6 +189,6 @@ export const configData: Record<string, string> = {
   maintenanceIntervalDays: '30',
   maxConcurrentBatches: '10',
   stabilizationPeriodMinutes: '15',
-  temperatureSetpointFeed: 'drytech.m-a1-temp',
+  temperatureSetpointFeed: 'drytech.m-a1-temperature',
   humiditySetpointFeed: 'drytech.m-a1-humidity',
 };

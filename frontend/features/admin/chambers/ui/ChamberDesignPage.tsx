@@ -84,7 +84,7 @@ const chamberSeeds: ChamberModel[] = [
         sensorType: 'temperature',
         value: 62.3,
         unit: '°C',
-        feed: 'drytech.m-a1-temp-in',
+        feed: 'drytech.m-a1-temp',
         status: 'online',
       },
       {
@@ -104,7 +104,7 @@ const chamberSeeds: ChamberModel[] = [
         sensorType: 'humidity',
         value: 43,
         unit: '%',
-        feed: 'drytech.m-a1-humidity-core',
+        feed: 'drytech.m-a1-humidity',
         status: 'online',
       },
     ],

@@ -24,8 +24,8 @@ export class UsersController {
 
   @Get()
   @RequirePermission('users.read')
-  findAll() {
-    return this.usersService.findAll();
+  findAll(@CurrentActor() actor?: ActorContext) {
+    return this.usersService.findAll(actor);
   }
 
   @Get(':id')

@@ -85,6 +85,21 @@ export type ApiUser = {
   role: string | null;
   status: string | null;
   createdAt: string | null;
+  organizationID: number | null;
+  factoryID: number | null;
+  siteID: number | null;
+  organization?: {
+    organizationID: number;
+    organizationName: string | null;
+  } | null;
+  factory?: {
+    factoryID: number;
+    factoryName: string | null;
+  } | null;
+  site?: {
+    siteID: number;
+    siteName: string | null;
+  } | null;
   zones: { zoneID: number; zoneName: string | null }[];
 };
 
@@ -98,6 +113,9 @@ export const usersApi = {
     password: string;
     role: string;
     chamberIDs?: number[];
+    organizationID?: number;
+    factoryID?: number;
+    siteID?: number;
   }) =>
     request<ApiUser>("/users", { method: "POST", body: JSON.stringify(data) }),
   update: (
@@ -110,6 +128,9 @@ export const usersApi = {
       status: string;
       password: string;
       chamberIDs: number[];
+      organizationID: number | null;
+      factoryID: number | null;
+      siteID: number | null;
     }>,
   ) =>
     request<ApiUser>(`/users/${id}`, {
@@ -125,16 +146,24 @@ export type ApiZone = {
   zoneName: string | null;
   zoneDescription: string | null;
   userID: number | null;
+  organizationID: number | null;
+  factoryID: number | null;
+  siteID: number | null;
+  site?: {
+    siteID: number;
+    siteName: string | null;
+    siteCode: string | null;
+  } | null;
   devices: { deviceID: number }[];
 };
 
 export const zonesApi = {
   getAll: () => request<ApiZone[]>("/zones"),
-  create: (data: { zoneName: string; zoneDescription?: string }) =>
+  create: (data: { zoneName: string; zoneDescription?: string; siteID?: number }) =>
     request<ApiZone>("/zones", { method: "POST", body: JSON.stringify(data) }),
   update: (
     id: number,
-    data: Partial<{ zoneName: string; zoneDescription: string }>,
+    data: Partial<{ zoneName: string; zoneDescription: string; siteID: number }>,
   ) =>
     request<ApiZone>(`/zones/${id}`, {
       method: "PATCH",
@@ -142,6 +171,7 @@ export const zonesApi = {
     }),
   remove: (id: number) => request<void>(`/zones/${id}`, { method: "DELETE" }),
 };
+
 
 export type ApiChamber = {
   chamberID: number;
@@ -784,3 +814,103 @@ export const analyticsApi = {
     );
   },
 };
+
+// ── Organizations ─────────────────────────────────────────────────────────
+export type ApiOrganization = {
+  organizationID: number;
+  organizationName: string | null;
+  organizationCode: string | null;
+  status: string | null;
+  _count?: {
+    factories: number;
+  };
+};
+
+export const organizationsApi = {
+  getAll: () => request<ApiOrganization[]>("/organizations"),
+  create: (data: { organizationName: string; organizationCode?: string; status?: string }) =>
+    request<ApiOrganization>("/organizations", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  update: (id: number, data: Partial<{ organizationName: string; organizationCode: string; status: string }>) =>
+    request<ApiOrganization>(`/organizations/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+  remove: (id: number) => request<void>(`/organizations/${id}`, { method: "DELETE" }),
+};
+
+// ── Factories ──────────────────────────────────────────────────────────────
+export type ApiFactory = {
+  factoryID: number;
+  organizationID: number | null;
+  factoryName: string | null;
+  factoryCode: string | null;
+  status: string | null;
+  organization?: {
+    organizationID: number;
+    organizationName: string | null;
+    organizationCode: string | null;
+  } | null;
+  _count?: {
+    sites: number;
+    devices: number;
+  };
+};
+
+export const factoriesApi = {
+  getAll: () => request<ApiFactory[]>("/factories"),
+  create: (data: { factoryName: string; factoryCode?: string; organizationID: number; status?: string }) =>
+    request<ApiFactory>("/factories", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  update: (
+    id: number,
+    data: Partial<{ factoryName: string; factoryCode: string; organizationID: number; status: string }>,
+  ) =>
+    request<ApiFactory>(`/factories/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+  remove: (id: number) => request<void>(`/factories/${id}`, { method: "DELETE" }),
+};
+
+// ── Sites ──────────────────────────────────────────────────────────────────
+export type ApiSite = {
+  siteID: number;
+  factoryID: number | null;
+  siteName: string | null;
+  siteCode: string | null;
+  status: string | null;
+  factory?: {
+    factoryID: number;
+    factoryName: string | null;
+    factoryCode: string | null;
+  } | null;
+  _count?: {
+    zones: number;
+    devices: number;
+    users: number;
+  };
+};
+
+export const sitesApi = {
+  getAll: () => request<ApiSite[]>("/sites"),
+  create: (data: { siteName: string; siteCode?: string; factoryID: number; status?: string }) =>
+    request<ApiSite>("/sites", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  update: (
+    id: number,
+    data: Partial<{ siteName: string; siteCode: string; factoryID: number; status: string }>,
+  ) =>
+    request<ApiSite>(`/sites/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+  remove: (id: number) => request<void>(`/sites/${id}`, { method: "DELETE" }),
+};
+

@@ -54,8 +54,10 @@ import {
   ApiAnalyticsMtbf,
   ApiBatch,
   ApiRecipe,
+  ApiZone,
   batchesApi,
   recipesApi,
+  zonesApi,
 } from "@/shared/lib/api";
 
 const { Title, Text } = Typography;
@@ -120,13 +122,14 @@ export default function DashboardPage() {
   const [recipes, setRecipes] = useState<ApiRecipe[]>([]);
   const [mtbfData, setMtbfData] = useState<ApiAnalyticsMtbf[]>([]);
   const [longRunningCount, setLongRunningCount] = useState(0);
+  const [zones, setZones] = useState<ApiZone[]>([]);
 
   const query = useMemo(() => {
     const [from, to] = range;
     return {
       from: from.startOf("day").toISOString(),
       to: to.endOf("day").toISOString(),
-      zoneId: zone === "zoneA" ? 1 : undefined,
+      zoneId: zone === "all" ? undefined : Number(zone),
     };
   }, [range, zone]);
 
@@ -136,7 +139,7 @@ export default function DashboardPage() {
     const load = async () => {
       setLoading(true);
       try {
-        const [s, t, h, m, r, runningRes] = await Promise.all([
+        const [s, t, h, m, r, runningRes, fetchedZones] = await Promise.all([
           analyticsApi.getSummary(query),
           analyticsApi.getTrend({
             ...query,
@@ -152,6 +155,7 @@ export default function DashboardPage() {
             page: 1,
             pageSize: 100,
           }),
+          zonesApi.getAll().catch(() => [] as ApiZone[]),
         ]);
 
         if (!mounted) return;
@@ -163,6 +167,7 @@ export default function DashboardPage() {
         setLongRunningCount(
           runningRes.items.filter((batch) => isBatchRunningLong(batch)).length,
         );
+        setZones(fetchedZones);
       } catch {
         if (!mounted) return;
         message.error("Không thể tải dữ liệu dashboard từ DB.");
@@ -289,10 +294,13 @@ export default function DashboardPage() {
             <Select
               value={zone}
               onChange={setZone}
-              style={{ width: 140 }}
+              style={{ width: 220 }}
               options={[
                 { value: "all", label: "Toàn nhà máy" },
-                { value: "zoneA", label: "Buồng sấy A" },
+                ...zones.map((z) => ({
+                  value: String(z.zoneID),
+                  label: z.zoneName ?? `Zone ${z.zoneID}`,
+                })),
               ]}
             />
           </Space>

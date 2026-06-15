@@ -1,5 +1,7 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import { AnalyticsService } from './analytics.service';
+import { CurrentActor } from '../common/rbac/current-actor.decorator';
+import type { ActorContext } from '../common/rbac/permissions';
 
 @Controller('analytics')
 export class AnalyticsController {
@@ -10,12 +12,16 @@ export class AnalyticsController {
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Query('zoneId') zoneId?: string,
+    @CurrentActor() actor?: ActorContext,
   ) {
-    return this.analyticsService.getSummary({
-      from,
-      to,
-      zoneId: zoneId ? Number(zoneId) : undefined,
-    });
+    return this.analyticsService.getSummary(
+      {
+        from,
+        to,
+        zoneId: zoneId ? Number(zoneId) : undefined,
+      },
+      actor,
+    );
   }
 
   @Get('trend')
@@ -27,16 +33,20 @@ export class AnalyticsController {
     @Query('status') status?: 'all' | 'success' | 'fail',
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
+    @CurrentActor() actor?: ActorContext,
   ) {
-    return this.analyticsService.getTrend({
-      from,
-      to,
-      zoneId: zoneId ? Number(zoneId) : undefined,
-      period,
-      status,
-      page: page ? Number(page) : undefined,
-      pageSize: pageSize ? Number(pageSize) : undefined,
-    });
+    return this.analyticsService.getTrend(
+      {
+        from,
+        to,
+        zoneId: zoneId ? Number(zoneId) : undefined,
+        period,
+        status,
+        page: page ? Number(page) : undefined,
+        pageSize: pageSize ? Number(pageSize) : undefined,
+      },
+      actor,
+    );
   }
 
   @Get('hourly-avg')
@@ -45,13 +55,17 @@ export class AnalyticsController {
     @Query('to') to?: string,
     @Query('zoneId') zoneId?: string,
     @Query('metric') metric?: string,
+    @CurrentActor() actor?: ActorContext,
   ) {
-    return this.analyticsService.getHourlyAvg({
-      from,
-      to,
-      zoneId: zoneId ? Number(zoneId) : undefined,
-      metric,
-    });
+    return this.analyticsService.getHourlyAvg(
+      {
+        from,
+        to,
+        zoneId: zoneId ? Number(zoneId) : undefined,
+        metric,
+      },
+      actor,
+    );
   }
 
   @Get('mtbf')
@@ -59,11 +73,15 @@ export class AnalyticsController {
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Query('zoneId') zoneId?: string,
+    @CurrentActor() actor?: ActorContext,
   ) {
-    return this.analyticsService.getMtbf({
-      from,
-      to,
-      zoneId: zoneId ? Number(zoneId) : undefined,
-    });
+    return this.analyticsService.getMtbf(
+      {
+        from,
+        to,
+        zoneId: zoneId ? Number(zoneId) : undefined,
+      },
+      actor,
+    );
   }
 }

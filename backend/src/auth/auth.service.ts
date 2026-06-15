@@ -44,6 +44,9 @@ export class AuthService {
       zone,
       zones,
       email: user.email,
+      organizationID: user.organizationID,
+      factoryID: user.factoryID,
+      siteID: user.siteID,
     };
   }
 }

@@ -13,7 +13,7 @@ export type ActorContext = {
 
 const ROLE_PERMISSIONS: Record<ActorRole, Permission[]> = {
   Admin: ['users.read', 'users.create', 'users.update', 'users.delete'],
-  Manager: ['users.read'],
+  Manager: ['users.read', 'users.create', 'users.update', 'users.delete'],
   Operator: [],
 };
 

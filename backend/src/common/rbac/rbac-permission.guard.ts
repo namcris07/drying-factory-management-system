@@ -29,10 +29,6 @@ export class RbacPermissionGuard implements CanActivate {
       [context.getHandler(), context.getClass()],
     );
 
-    if (!requiredPermissions || requiredPermissions.length === 0) {
-      return true;
-    }
-
     const request = context.switchToHttp().getRequest<RequestWithActor>();
     const roleHeader = request.headers?.['x-user-role'];
     const userIdHeader = request.headers?.['x-user-id'];
@@ -42,17 +38,25 @@ export class RbacPermissionGuard implements CanActivate {
       ? userIdHeader[0]
       : userIdHeader;
 
-    if (!isActorRole(role)) {
-      throw new UnauthorizedException('Thiếu vai trò truy cập hợp lệ.');
+    if (isActorRole(role) && userIdRaw) {
+      const userID = Number(userIdRaw);
+      if (Number.isInteger(userID) && userID > 0) {
+        request.actor = { userID, role };
+      }
     }
 
-    const userID = Number(userIdRaw);
-    if (!Number.isInteger(userID) || userID <= 0) {
-      throw new UnauthorizedException('Thiếu định danh người dùng hợp lệ.');
+    if (!requiredPermissions || requiredPermissions.length === 0) {
+      return true;
+    }
+
+    if (!request.actor) {
+      throw new UnauthorizedException(
+        'Thiếu vai trò hoặc định danh truy cập hợp lệ.',
+      );
     }
 
     const hasAllPermissions = requiredPermissions.every((permission) =>
-      hasPermission(role, permission),
+      hasPermission(request.actor!.role, permission),
     );
 
     if (!hasAllPermissions) {
@@ -61,7 +65,6 @@ export class RbacPermissionGuard implements CanActivate {
       );
     }
 
-    request.actor = { userID, role };
     return true;
   }
 }

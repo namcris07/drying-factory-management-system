@@ -13,7 +13,7 @@ import {
   UserSwitchOutlined, SettingOutlined,
   FileTextOutlined, LogoutOutlined, UserOutlined, ApartmentOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, WifiOutlined, DisconnectOutlined,
-  DeploymentUnitOutlined,
+  DeploymentUnitOutlined, BankOutlined, BuildOutlined, BranchesOutlined,
 } from '@ant-design/icons';
 import NotificationCenter from '@/features/notifications/ui/NotificationCenter';
 import { clearAuthSession } from '@/shared/auth/session';
@@ -23,12 +23,16 @@ const { Sider, Header, Content } = Layout;
 const { Text } = Typography;
 
 const MENU_ITEMS = [
-  { key: '/admin/users',      icon: <UserSwitchOutlined />, label: 'Quản lý Người dùng'    },
-  { key: '/admin/zones',      icon: <DeploymentUnitOutlined />, label: 'Quản lý Zone'      },
-  { key: '/admin/chambers',   icon: <ApartmentOutlined />,  label: 'Quản lý Buồng sấy'      },
-  { key: '/admin/thresholds', icon: <SettingOutlined />,    label: 'Thiết lập Ngưỡng'      },
-  { key: '/admin/logs',       icon: <FileTextOutlined />,   label: 'Nhật ký Hệ thống'      },
+  { key: '/admin/users',          icon: <UserSwitchOutlined />,  label: 'Quản lý Người dùng'   },
+  { key: '/admin/organizations',  icon: <BankOutlined />,        label: 'Quản lý Tổ chức'     },
+  { key: '/admin/factories',      icon: <BuildOutlined />,       label: 'Quản lý Nhà máy'     },
+  { key: '/admin/sites',          icon: <BranchesOutlined />,    label: 'Quản lý Phân xưởng'   },
+  { key: '/admin/zones',          icon: <DeploymentUnitOutlined />, label: 'Quản lý Zone'      },
+  { key: '/admin/chambers',       icon: <ApartmentOutlined />,   label: 'Quản lý Buồng sấy'    },
+  { key: '/admin/thresholds',     icon: <SettingOutlined />,     label: 'Thiết lập Ngưỡng'    },
+  { key: '/admin/logs',           icon: <FileTextOutlined />,    label: 'Nhật ký Hệ thống'    },
 ];
+
 
 /** Hook giả lập trạng thái MQTT Broker (thay bằng WebSocket/SSE khi có BE) */
 function useMqttStatus() {

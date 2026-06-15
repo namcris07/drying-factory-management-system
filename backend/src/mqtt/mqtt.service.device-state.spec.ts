@@ -153,7 +153,7 @@ describe('MqttService device state', () => {
       if (select?.mqttTopicSensor) {
         return [
           {
-            mqttTopicSensor: 'drytech.m-a1-humidity,drytech.m-a1-temp',
+            mqttTopicSensor: 'drytech.m-a1-humidity,drytech.m-a1-temperature',
             metaData: null,
           },
         ];
@@ -170,9 +170,9 @@ describe('MqttService device state', () => {
       source: 'server-command',
       updatedAt: '2026-01-01T10:00:00.000Z',
     });
-    (service as any).feedState.set('drytech.m-a1-temp', {
-      feed: 'drytech.m-a1-temp',
-      topic: '/feeds/drytech.m-a1-temp',
+    (service as any).feedState.set('drytech.m-a1-temperature', {
+      feed: 'drytech.m-a1-temperature',
+      topic: '/feeds/drytech.m-a1-temperature',
       value: 55,
       source: 'adafruit',
       updatedAt: '2026-01-01T10:00:00.000Z',
@@ -197,7 +197,7 @@ describe('MqttService device state', () => {
             threshold: 76,
           },
           {
-            sensorFeed: 'drytech.m-a1-temp',
+            sensorFeed: 'drytech.m-a1-temperature',
             comparator: 'lte',
             threshold: 60,
           },
@@ -246,7 +246,7 @@ describe('MqttService device state', () => {
     prisma.device.findUnique.mockResolvedValue({
       deviceID: 7,
       mqttTopicCmd: 'drytech.m-a1-fan_level',
-      mqttTopicSensor: 'drytech.m-a1-temp',
+      mqttTopicSensor: 'drytech.m-a1-temperature',
     });
 
     (service as any).isPublishFeedAllowed = jest.fn().mockResolvedValue(true);

@@ -1,5 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import type { ActorContext } from '../common/rbac/permissions';
 
 type AnalyticsQuery = {
   from?: string;
@@ -24,6 +25,16 @@ type BatchLike = {
 @Injectable()
 export class AnalyticsService {
   constructor(private readonly prisma: PrismaService) {}
+
+  private async getUserScope(actor?: ActorContext) {
+    if (!actor || actor.role === 'Admin') return null;
+    const user = await this.prisma.user.findUnique({
+      where: { userID: actor.userID },
+      select: { organizationID: true, factoryID: true, siteID: true },
+    });
+    if (!user) throw new ForbiddenException('User scope not found.');
+    return user;
+  }
 
   private startOfWeek(date: Date) {
     const value = new Date(date);
@@ -163,29 +174,51 @@ export class AnalyticsService {
     return null;
   }
 
-  async getSummary(query: AnalyticsQuery) {
+  async getSummary(query: AnalyticsQuery, actor?: ActorContext) {
     const { from, to } = this.parseRange(query.from, query.to, true);
+    const scope = await this.getUserScope(actor);
+
+    const batchWhere: any = {
+      startedAt: {
+        gte: from ?? undefined,
+        lt: to ?? undefined,
+      },
+    };
+    if (scope) {
+      if (actor?.role === 'Manager') {
+        batchWhere.factoryID = scope.factoryID ?? -1;
+      } else if (actor?.role === 'Operator') {
+        batchWhere.siteID = scope.siteID ?? -1;
+      }
+    }
+    if (query.zoneId) {
+      batchWhere.device = {
+        zoneID: query.zoneId,
+      };
+    }
 
     const rows = await this.prisma.batch.findMany({
-      where: {
-        startedAt: {
-          gte: from ?? undefined,
-          lt: to ?? undefined,
-        },
-        device: query.zoneId
-          ? {
-              zoneID: query.zoneId,
-            }
-          : undefined,
-      },
+      where: batchWhere,
       select: {
         batchStatus: true,
         batchResult: true,
       },
     });
 
+    const deviceWhere: any = {};
+    if (scope) {
+      if (actor?.role === 'Manager') {
+        deviceWhere.factoryID = scope.factoryID ?? -1;
+      } else if (actor?.role === 'Operator') {
+        deviceWhere.siteID = scope.siteID ?? -1;
+      }
+    }
+    if (query.zoneId) {
+      deviceWhere.zoneID = query.zoneId;
+    }
+
     const machineRows = await this.prisma.device.findMany({
-      where: query.zoneId ? { zoneID: query.zoneId } : undefined,
+      where: deviceWhere,
       select: { deviceStatus: true },
     });
 
@@ -228,7 +261,7 @@ export class AnalyticsService {
     };
   }
 
-  async getTrend(query: AnalyticsQuery) {
+  async getTrend(query: AnalyticsQuery, actor?: ActorContext) {
     const { from, to } = this.parseRange(query.from, query.to, true);
     const period =
       query.period === 'week' ||
@@ -243,18 +276,28 @@ export class AnalyticsService {
     const page = Math.max(1, Number(query.page ?? 1));
     const pageSize = Math.min(100, Math.max(1, Number(query.pageSize ?? 10)));
 
-    const rows = await this.prisma.batch.findMany({
-      where: {
-        startedAt: {
-          gte: from ?? undefined,
-          lt: to ?? undefined,
-        },
-        device: query.zoneId
-          ? {
-              zoneID: query.zoneId,
-            }
-          : undefined,
+    const scope = await this.getUserScope(actor);
+    const batchWhere: any = {
+      startedAt: {
+        gte: from ?? undefined,
+        lt: to ?? undefined,
       },
+    };
+    if (scope) {
+      if (actor?.role === 'Manager') {
+        batchWhere.factoryID = scope.factoryID ?? -1;
+      } else if (actor?.role === 'Operator') {
+        batchWhere.siteID = scope.siteID ?? -1;
+      }
+    }
+    if (query.zoneId) {
+      batchWhere.device = {
+        zoneID: query.zoneId,
+      };
+    }
+
+    const rows = await this.prisma.batch.findMany({
+      where: batchWhere,
       select: {
         startedAt: true,
         batchStatus: true,
@@ -336,12 +379,49 @@ export class AnalyticsService {
     };
   }
 
-  async getHourlyAvg(query: HourlyQuery) {
+  async getHourlyAvg(query: HourlyQuery, actor?: ActorContext) {
     const { from, to } = this.parseRange(query.from, query.to, false);
     const metric =
       (query.metric ?? 'temperature').toLowerCase() === 'humidity'
         ? 'humidity'
         : 'temperature';
+
+    const scope = await this.getUserScope(actor);
+    const deviceWhere: any = {};
+    let shouldFilterDevices = false;
+
+    if (scope) {
+      shouldFilterDevices = true;
+      if (actor?.role === 'Manager') {
+        deviceWhere.factoryID = scope.factoryID ?? -1;
+      } else if (actor?.role === 'Operator') {
+        deviceWhere.siteID = scope.siteID ?? -1;
+      }
+    }
+    if (query.zoneId) {
+      shouldFilterDevices = true;
+      deviceWhere.zoneID = query.zoneId;
+    }
+
+    let deviceIdFilter: any = undefined;
+    if (shouldFilterDevices) {
+      const devices = await this.prisma.device.findMany({
+        where: deviceWhere,
+        select: { deviceID: true },
+      });
+      const deviceIDs = devices.map((d) => d.deviceID);
+      if (deviceIDs.length === 0) {
+        return {
+          metric,
+          range: {
+            from: from?.toISOString() ?? null,
+            to: to?.toISOString() ?? null,
+          },
+          points: [],
+        };
+      }
+      deviceIdFilter = { in: deviceIDs };
+    }
 
     const rows = await this.prisma.sensorDataLog.findMany({
       where: {
@@ -349,16 +429,7 @@ export class AnalyticsService {
           gte: from ?? undefined,
           lt: to ?? undefined,
         },
-        deviceID: query.zoneId
-          ? {
-              in: (
-                await this.prisma.device.findMany({
-                  where: { zoneID: query.zoneId },
-                  select: { deviceID: true },
-                })
-              ).map((d) => d.deviceID),
-            }
-          : undefined,
+        deviceID: deviceIdFilter,
       },
       select: {
         logTimestamp: true,
@@ -403,9 +474,22 @@ export class AnalyticsService {
     };
   }
 
-  async getMtbf(query: AnalyticsQuery) {
+  async getMtbf(query: AnalyticsQuery, actor?: ActorContext) {
+    const scope = await this.getUserScope(actor);
+    const deviceWhere: any = {};
+    if (scope) {
+      if (actor?.role === 'Manager') {
+        deviceWhere.factoryID = scope.factoryID ?? -1;
+      } else if (actor?.role === 'Operator') {
+        deviceWhere.siteID = scope.siteID ?? -1;
+      }
+    }
+    if (query.zoneId) {
+      deviceWhere.zoneID = query.zoneId;
+    }
+
     const devices = await this.prisma.device.findMany({
-      where: query.zoneId ? { zoneID: query.zoneId } : undefined,
+      where: deviceWhere,
       include: {
         alerts: {
           orderBy: { alertTime: 'desc' },

@@ -708,7 +708,7 @@ describe('Controllers coverage', () => {
 
     expect(recipesSvc.create).toHaveBeenCalled();
     expect(usersSvc.update).toHaveBeenCalled();
-    expect(zonesSvc.findOne).toHaveBeenCalledWith(1);
+    expect(zonesSvc.findOne).toHaveBeenCalledWith(1, undefined);
   });
 
   it('sensor-data and system-config controllers parse/delegate correctly', async () => {
